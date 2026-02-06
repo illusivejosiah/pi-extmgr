@@ -20,8 +20,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check",
-    "prepublishOnly": "pnpm run check"
+    "smoke-test": "node --import=tsx --eval \"import('./index.ts').then(() => console.log('✓ Extension loads')).catch(e => { console.error('✗ Extension failed to load:', e); process.exit(1) })\"",
+    "check": "pnpm run typecheck && pnpm run smoke-test && pnpm run lint && pnpm run format:check",
+    "prepublishOnly": "pnpm run check",
+    "prepare": "husky"
   },
   "pi": {
     "extensions": [
@@ -40,7 +42,9 @@
     "@typescript-eslint/parser": "^8.42.0",
     "eslint": "^9.38.0",
     "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
     "prettier": "^3.8.1",
+    "tsx": "^4.19.3",
     "typescript": "^5.9.3"
   },
   "author": "ayagmar",

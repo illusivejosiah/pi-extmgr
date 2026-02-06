@@ -14,11 +14,9 @@
  *   /extensions installed - List installed packages
  */
 
-import { access, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { createWriteStream } from "node:fs";
-import { pipeline } from "node:stream/promises";
 import type { Dirent } from "node:fs";
 import type {
   ExtensionAPI,
@@ -426,7 +424,7 @@ async function applyStagedChanges(entries: ExtensionEntry[], staged: Map<string,
       entry.state = target;
       changed++;
     } else {
-      errors.push(`${entry.displayName}: ${result.error}`);
+      errors.push(`${entry.displayName}: ${(result as { error: string }).error}`);
     }
   }
 
@@ -1077,11 +1075,11 @@ async function installPackageLocally(
     }
 
     // Save tarball
-    const fileStream = createWriteStream(tarballPath);
-    if (response.body) {
-      await pipeline(response.body, fileStream);
-    } else {
-      const errorMsg = "Download failed: no response body";
+    try {
+      const buffer = await response.arrayBuffer();
+      await writeFile(tarballPath, new Uint8Array(buffer));
+    } catch (err) {
+      const errorMsg = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
       if (ctx.hasUI) {
         ctx.ui.notify(errorMsg, "error");
       } else {
@@ -1793,5 +1791,5 @@ function dedupeExtensions(entries: ExtensionEntry[]): ExtensionEntry[] {
       byId.set(entry.id, entry);
     }
   }
-  return [...byId.values()];
+  return Array.from(byId.values());
 }
