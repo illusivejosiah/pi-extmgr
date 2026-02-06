@@ -30,8 +30,9 @@
 
 - **Multiple source support**: npm, git, local paths
 - **Two install modes**:
-  - **Managed** (npm) - Auto-updates with `pi update`
-  - **Standalone** (local) - Download directly to extensions folder
+  - **Managed** (npm) - Auto-updates with `pi update`, stored in pi's package cache
+  - **Standalone** (local) - Full package directory to `~/.pi/agent/extensions/{package}/`
+- **Multi-file extension support** - Local install copies entire package directory, preserving imports
 - **Auto-extract** from npm tarballs for local installs
 - **One-click reload** after installation
 
@@ -219,9 +220,21 @@ export default function myTheme(pi: ExtensionAPI) {
 2. Press `R` for remote packages
 3. Browse or search for the extension
 4. Press `Enter` on the desired package
-5. Choose "Install via npm (managed)" or "Install locally (standalone)"
+5. Choose install mode:
+   - **"Install via npm (managed)"** - Uses pi's package manager. Auto-updates with `pi update`. Best for most users.
+   - **"Install locally (standalone)"** - Copies entire package to `~/.pi/agent/extensions/{package}/`. Supports multi-file extensions with imports. Manual updates required.
 6. Confirm installation
 7. Choose to reload Pi to activate
+
+**Local Install Directory Structure:**
+
+```
+~/.pi/agent/extensions/
+└── pi-some-extension/          # Full package directory
+    ├── index.ts               # Entry point
+    ├── utils.ts               # Helper (imports work!)
+    └── package.json           # Original package.json preserved
+```
 
 ### Disabling an Extension Temporarily
 
@@ -262,6 +275,10 @@ Check that the file has a `.ts` or `.js` extension and is in one of the discover
 - Check npm is installed and accessible
 - For git installs, ensure git is available
 - Verify the package has the `pi-package` keyword for browsing
+
+### Same package showing twice in installed list
+
+This can happen when `pi list` returns the same package in different formats (e.g., both `npm:package@1.0.0` and the full node_modules path). The extension now automatically deduplicates by package name.
 
 ## 🤝 Contributing
 

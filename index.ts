@@ -161,20 +161,26 @@ export default function extensionsManager(pi: ExtensionAPI) {
   });
 
   // Status bar integration - show installed package count
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) return;
 
-    try {
-      const packages = await getInstalledPackages(ctx, pi);
-      if (packages.length > 0) {
-        ctx.ui.setStatus(
-          "extmgr",
-          ctx.ui.theme.fg("dim", `${packages.length} pkg${packages.length === 1 ? "" : "s"}`)
-        );
-      }
-    } catch {
-      // Silently ignore status bar errors
-    }
+    // Defer status update to avoid interfering with extension loading lifecycle
+    // This prevents race conditions during reload where commands might not appear
+    setImmediate(() => {
+      void (async () => {
+        try {
+          const packages = await getInstalledPackages(ctx, pi);
+          if (packages.length > 0) {
+            ctx.ui.setStatus(
+              "extmgr",
+              ctx.ui.theme.fg("dim", `${packages.length} pkg${packages.length === 1 ? "" : "s"}`)
+            );
+          }
+        } catch {
+          // Silently ignore status bar errors
+        }
+      })();
+    });
   });
 }
 
@@ -1143,14 +1149,22 @@ async function installPackageLocally(
       return;
     }
 
-    // Copy index.ts to extensions dir with proper name
-    const extFileName = `${packageName.replace(/[@/]/g, "-")}.ts`;
-    const destPath = join(globalExtDir, extFileName);
-    const copyRes = await pi.exec("cp", [indexPath, destPath], { timeout: 10000, cwd: ctx.cwd });
+    // Copy entire directory to extensions dir (supports multi-file extensions)
+    const extDirName = packageName.replace(/[@/]/g, "-");
+    const destDir = join(globalExtDir, extDirName);
+
+    // Remove existing directory if present
+    await rm(destDir, { recursive: true, force: true });
+
+    // Copy entire extracted directory
+    const copyRes = await pi.exec("cp", ["-r", extractDir, destDir], {
+      timeout: 30000,
+      cwd: ctx.cwd,
+    });
     if (copyRes.code !== 0) {
       // Clean up extraction dir
       await rm(extractDir, { recursive: true, force: true });
-      const errorMsg = `Failed to copy extension file: ${copyRes.stderr || copyRes.stdout || `exit ${copyRes.code}`}`;
+      const errorMsg = `Failed to copy extension directory: ${copyRes.stderr || copyRes.stdout || `exit ${copyRes.code}`}`;
       if (ctx.hasUI) {
         ctx.ui.notify(errorMsg, "error");
       } else {
@@ -1163,7 +1177,7 @@ async function installPackageLocally(
     await rm(extractDir, { recursive: true, force: true });
 
     // Success
-    const successMsg = `Installed ${packageName}@${version} locally to:\n${destPath}`;
+    const successMsg = `Installed ${packageName}@${version} locally to:\n${destDir}/index.ts`;
     if (ctx.hasUI) {
       ctx.ui.notify(successMsg, "info");
 
@@ -1461,6 +1475,7 @@ async function getInstalledPackages(
 
   const packages: InstalledPackage[] = [];
   const seenSources = new Set<string>();
+  const seenNames = new Set<string>();
 
   const lines = text.split("\n");
   let currentScope: "global" | "project" = "global";
@@ -1525,6 +1540,10 @@ async function getInstalledPackages(
           }
         }
       }
+
+      // Deduplicate by package name (handles same pkg in both npm: and node_modules/ path formats)
+      if (seenNames.has(name)) continue;
+      seenNames.add(name);
 
       const pkg: InstalledPackage = { source, name, scope: currentScope };
       if (version !== undefined) {
