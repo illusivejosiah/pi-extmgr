@@ -682,9 +682,7 @@ async function browseRemotePackages(
     container.addChild(new Spacer(1));
 
     // Help text
-    container.addChild(
-      new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • / Search • Esc Cancel"), 2, 0)
-    );
+    container.addChild(new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • Esc Cancel"), 2, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -867,7 +865,6 @@ async function showInstalledPackages(ctx: ExtensionCommandContext, pi: Extension
   const items = packages.map((p) => `${p.name}${p.version ? ` @${p.version}` : ""} (${p.scope})`);
 
   items.push("[Update all packages]");
-  items.push("[Configure packages]");
   items.push("[Back]");
 
   const picked = await ctx.ui.select(`Installed Packages (${packages.length})`, items);
@@ -875,8 +872,6 @@ async function showInstalledPackages(ctx: ExtensionCommandContext, pi: Extension
 
   if (picked === "[Update all packages]") {
     await updatePackages(ctx, pi);
-  } else if (picked === "[Configure packages]") {
-    ctx.ui.setEditorText("/config");
   } else if (picked === "[Back]") {
     await showInteractive(ctx, pi);
   } else {
