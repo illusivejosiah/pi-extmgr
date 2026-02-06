@@ -175,6 +175,17 @@ async function showListOnly(ctx: ExtensionCommandContext) {
 }
 
 async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
+  // Main loop - keeps showing the menu until user explicitly exits
+  while (true) {
+    const shouldExit = await showInteractiveOnce(ctx, pi);
+    if (shouldExit) break;
+  }
+}
+
+async function showInteractiveOnce(
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI
+): Promise<boolean> {
   const entries = await discoverExtensions(ctx.cwd);
 
   // If no local extensions, offer to browse remote
@@ -187,17 +198,19 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 
     if (choice === "Browse community packages") {
       await browseRemotePackages(ctx, "keywords:pi-package", pi);
+      return false; // Return to main menu
     } else if (choice === "List installed packages") {
       await showInstalledPackages(ctx, pi);
+      return false; // Return to main menu
     }
-    return;
+    return true; // Exit
   }
 
   // Staged changes tracking
   const staged = new Map(entries.map((e) => [e.id, e.state]));
   const byId = new Map(entries.map((e) => [e.id, e]));
 
-  type Action = "cancel" | "apply" | "installed" | "remote" | "help";
+  type Action = "cancel" | "apply" | "installed" | "remote" | "help" | "menu";
 
   const result = await ctx.ui.custom<Action>((tui, theme, _keybindings, done) => {
     const container = new Container();
@@ -247,8 +260,8 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
     });
 
     const helpText = hasChanges
-      ? "Arrow keys Navigate | Space/Enter Toggle | S Save* | I Installed | R Remote | ? Help | Esc Cancel"
-      : "Arrow keys Navigate | Space/Enter Toggle | S Save | I Installed | R Remote | ? Help | Esc Cancel";
+      ? "↑↓ Navigate | Space/Enter Toggle | S Save* | I Installed | R Remote | M Menu | ? Help | Esc Cancel"
+      : "↑↓ Navigate | Space/Enter Toggle | S Save | I Installed | R Remote | M Menu | ? Help | Esc Cancel";
 
     container.addChild(new Text(theme.fg("dim", helpText), 2, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -277,6 +290,10 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
           done("help");
           return;
         }
+        if (data === "m" || data === "M") {
+          done("menu");
+          return;
+        }
         settingsList.handleInput?.(data);
         tui.requestRender();
       },
@@ -286,16 +303,18 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
   switch (result) {
     case "cancel":
       ctx.ui.notify("No changes applied.", "info");
-      return;
+      return true; // Exit
     case "installed":
       await showInstalledPackages(ctx, pi);
-      return;
+      return false; // Return to main menu
     case "remote":
       await showRemote("", ctx, pi);
-      return;
+      return false; // Return to main menu
     case "help":
       showHelp(ctx, pi);
-      return;
+      return false; // Return to main menu
+    case "menu":
+      return false; // Return to main menu (already there)
   }
 
   // Apply changes
@@ -308,7 +327,7 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
     );
   } else if (apply.changed === 0) {
     ctx.ui.notify("No changes to apply.", "info");
-    return;
+    return false; // Return to main menu
   } else {
     ctx.ui.notify(`Applied ${apply.changed} extension change(s).`, "info");
   }
@@ -322,6 +341,8 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
   if (shouldReload) {
     ctx.ui.setEditorText("/reload");
   }
+
+  return false; // Return to main menu
 }
 
 function formatEntryLabel(
@@ -368,11 +389,12 @@ function showHelp(ctx: ExtensionCommandContext, pi: ExtensionAPI): void {
     "  - .pi/extensions/ (project-local)",
     "",
     "Navigation:",
-    "  Arrow keys   Navigate list",
+    "  ↑↓           Navigate list",
     "  Space/Enter  Toggle enabled/disabled",
     "  S            Save changes",
     "  I            View installed packages",
     "  R            Browse remote packages",
+    "  M            Main menu (exit to command line)",
     "  ?/H          Show this help",
     "  Esc          Cancel",
     "",
@@ -427,7 +449,7 @@ async function showRemote(args: string, ctx: ExtensionCommandContext, pi: Extens
 }
 
 async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
-  type MenuAction = "browse" | "search" | "install" | "list" | "cancel";
+  type MenuAction = "browse" | "search" | "install" | "list" | "cancel" | "main" | "help";
 
   const result = await ctx.ui.custom<MenuAction>((tui, theme, _kb, done) => {
     const container = new Container();
@@ -461,7 +483,13 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
 
     container.addChild(selectList);
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • Esc Cancel"), 2, 0));
+    container.addChild(
+      new Text(
+        theme.fg("dim", "↑↓ Navigate • Enter Select • M Main Menu • ? Help • Esc Cancel"),
+        2,
+        0
+      )
+    );
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -472,6 +500,14 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
         container.invalidate();
       },
       handleInput(data: string) {
+        if (data === "m" || data === "M") {
+          done("main");
+          return;
+        }
+        if (data === "?" || data === "h" || data === "H") {
+          done("help");
+          return;
+        }
         selectList.handleInput(data);
         tui.requestRender();
       },
@@ -490,6 +526,11 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
       break;
     case "list":
       await showInstalledPackages(ctx, pi);
+      break;
+    case "main":
+      return;
+    case "help":
+      showHelp(ctx, pi);
       break;
     case "cancel":
       return;
@@ -522,6 +563,8 @@ async function browseRemotePackages(
     | { type: "next" }
     | { type: "refresh" }
     | { type: "menu" }
+    | { type: "main" }
+    | { type: "help" }
     | { type: "cancel" };
 
   // Show loading state
@@ -682,7 +725,9 @@ async function browseRemotePackages(
     container.addChild(new Spacer(1));
 
     // Help text
-    container.addChild(new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • Esc Cancel"), 2, 0));
+    container.addChild(
+      new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • M Main • ? Help • Esc Cancel"), 2, 0)
+    );
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -693,6 +738,14 @@ async function browseRemotePackages(
         container.invalidate();
       },
       handleInput(data: string) {
+        if (data === "m" || data === "M") {
+          done({ type: "main" });
+          return;
+        }
+        if (data === "?" || data === "h" || data === "H") {
+          done({ type: "help" });
+          return;
+        }
         selectList.handleInput(data);
         tui.requestRender();
       },
@@ -714,6 +767,11 @@ async function browseRemotePackages(
       return;
     case "menu":
       await showRemoteMenu(ctx, pi);
+      return;
+    case "main":
+      return;
+    case "help":
+      showHelp(ctx, pi);
       return;
     case "package":
       await showPackageDetails(result.name, ctx, pi);
