@@ -9,14 +9,14 @@
     "pi-extension-manager"
   ],
   "type": "module",
-  "main": "./extensions/index.ts",
+  "main": "./index.ts",
   "files": [
-    "extensions/",
+    "index.ts",
     "README.md"
   ],
   "pi": {
     "extensions": [
-      ".index.ts"
+      "./index.ts"
     ]
   },
   "peerDependencies": {
@@ -25,5 +25,13 @@
     "@sinclair/typebox": "*"
   },
   "author": "ayagmar",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ayagmar/pi-extmgr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ayagmar/pi-extmgr/issues"
+  },
+  "homepage": "https://github.com/ayagmar/pi-extmgr/blob/master/README.md"
 }
