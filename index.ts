@@ -14,9 +14,9 @@
  *   /extensions installed - List installed packages
  */
 
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import * as os from "node:os";
+import { access, readdir, readFile, rename } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, relative } from "node:path";
 import type { Dirent } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { Theme } from "@mariozechner/pi-coding-agent";
@@ -1113,8 +1113,8 @@ function themeLabel(_color: string, text: string): string {
 
 async function discoverExtensions(cwd: string): Promise<ExtensionEntry[]> {
   const roots: { root: string; scope: Scope; label: string }[] = [
-    { root: path.join(os.homedir(), ".pi", "agent", "extensions"), scope: "global", label: "~/.pi/agent/extensions" },
-    { root: path.join(cwd, ".pi", "extensions"), scope: "project", label: ".pi/extensions" },
+    { root: join(homedir(), ".pi", "agent", "extensions"), scope: "global", label: "~/.pi/agent/extensions" },
+    { root: join(cwd, ".pi", "extensions"), scope: "project", label: ".pi/extensions" },
   ];
 
   const all: ExtensionEntry[] = [];
@@ -1129,7 +1129,7 @@ async function discoverExtensions(cwd: string): Promise<ExtensionEntry[]> {
 async function discoverInRoot(root: string, scope: Scope, label: string): Promise<ExtensionEntry[]> {
   let dirEntries: Dirent[];
   try {
-    dirEntries = await fs.readdir(root, { withFileTypes: true });
+    dirEntries = await readdir(root, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -1165,13 +1165,13 @@ async function parseTopLevelFile(
 
   if (!isEnabledTsJs && !isDisabledTsJs) return undefined;
 
-  const currentPath = path.join(root, fileName);
+  const currentPath = join(root, fileName);
   const activePath = isDisabledTsJs ? currentPath.slice(0, -DISABLED_SUFFIX.length) : currentPath;
   const disabledPath = `${activePath}${DISABLED_SUFFIX}`;
   const state: State = isDisabledTsJs ? "disabled" : "enabled";
   const summary = await readSummary(state === "enabled" ? activePath : disabledPath);
 
-  const relative = path.relative(root, activePath).replace(/\.disabled$/i, "");
+  const relativePath = relative(root, activePath).replace(/\.disabled$/i, "");
 
   return {
     id: `${scope}:${activePath}`,
@@ -1179,7 +1179,7 @@ async function parseTopLevelFile(
     state,
     activePath,
     disabledPath,
-    displayName: `${label}/${relative}`,
+    displayName: `${label}/${relativePath}`,
     summary,
   };
 }
@@ -1190,10 +1190,10 @@ async function parseDirectoryIndex(
   scope: Scope,
   dirName: string
 ): Promise<ExtensionEntry | undefined> {
-  const dir = path.join(root, dirName);
+  const dir = join(root, dirName);
 
   for (const ext of [".ts", ".js"]) {
-    const activePath = path.join(dir, `index${ext}`);
+    const activePath = join(dir, `index${ext}`);
     const disabledPath = `${activePath}${DISABLED_SUFFIX}`;
 
     if (await fileExists(activePath)) {
@@ -1227,9 +1227,9 @@ async function parseDirectoryIndex(
 async function setState(entry: ExtensionEntry, target: State): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     if (target === "enabled") {
-      await fs.rename(entry.disabledPath, entry.activePath);
+      await rename(entry.disabledPath, entry.activePath);
     } else {
-      await fs.rename(entry.activePath, entry.disabledPath);
+      await rename(entry.activePath, entry.disabledPath);
     }
     return { ok: true };
   } catch (error) {
@@ -1239,7 +1239,7 @@ async function setState(entry: ExtensionEntry, target: State): Promise<{ ok: tru
 
 async function readSummary(filePath: string): Promise<string> {
   try {
-    const text = await fs.readFile(filePath, "utf8");
+    const text = await readFile(filePath, "utf8");
     const trimmed = text.trimStart();
 
     // Look for JSDoc/description patterns
@@ -1295,7 +1295,7 @@ async function readSummary(filePath: string): Promise<string> {
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    await fs.access(filePath);
+    await access(filePath);
     return true;
   } catch {
     return false;
