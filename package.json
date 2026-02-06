@@ -20,7 +20,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "smoke-test": "node --import=tsx --eval \"import('./index.ts').then(() => console.log('✓ Extension loads')).catch(e => { console.error('✗ Extension failed to load:', e); process.exit(1) })\"",
+    "smoke-test": "node --import=tsx ./scripts/smoke-test.mjs",
     "check": "pnpm run typecheck && pnpm run smoke-test && pnpm run lint && pnpm run format:check",
     "prepublishOnly": "pnpm run check",
     "prepare": "husky"

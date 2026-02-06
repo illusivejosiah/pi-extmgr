@@ -1095,8 +1095,11 @@ async function installPackageLocally(
       console.log(`Extracting ${packageName}...`);
     }
 
-    // Create temp extraction directory
-    const extractDir = join(tempDir, "extracted");
+    // Create a unique temp extraction directory to avoid collisions
+    const extractDir = join(
+      tempDir,
+      `extracted-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
     await mkdir(extractDir, { recursive: true });
 
     // Extract with tar
@@ -1143,7 +1146,18 @@ async function installPackageLocally(
     // Copy index.ts to extensions dir with proper name
     const extFileName = `${packageName.replace(/[@/]/g, "-")}.ts`;
     const destPath = join(globalExtDir, extFileName);
-    await pi.exec("cp", [indexPath, destPath], { timeout: 10000, cwd: ctx.cwd });
+    const copyRes = await pi.exec("cp", [indexPath, destPath], { timeout: 10000, cwd: ctx.cwd });
+    if (copyRes.code !== 0) {
+      // Clean up extraction dir
+      await rm(extractDir, { recursive: true, force: true });
+      const errorMsg = `Failed to copy extension file: ${copyRes.stderr || copyRes.stdout || `exit ${copyRes.code}`}`;
+      if (ctx.hasUI) {
+        ctx.ui.notify(errorMsg, "error");
+      } else {
+        console.error(errorMsg);
+      }
+      return;
+    }
 
     // Clean up extraction dir
     await rm(extractDir, { recursive: true, force: true });
@@ -1193,15 +1207,14 @@ async function promptRemove(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
     return;
   }
 
-  const items = packages.map((p) => `${p.name}${p.version ? ` @${p.version}` : ""} (${p.scope})`);
+  const items = packages.map((p, index) => formatInstalledPackageLabel(p, index));
 
   const toRemove = await ctx.ui.select("Remove package", items);
   if (!toRemove) return;
 
-  const packageName = toRemove.split(" @")[0]?.split(" (")[0];
-  if (!packageName) return;
-
-  const pkg = packages.find((p) => p.name === packageName);
+  const indexMatch = toRemove.match(/^\[(\d+)\]\s+/);
+  const selectedIndex = indexMatch ? Number(indexMatch[1]) - 1 : -1;
+  const pkg = selectedIndex >= 0 ? packages[selectedIndex] : undefined;
   if (pkg) {
     await removePackage(pkg.source, ctx, pi);
   }
@@ -1267,12 +1280,12 @@ async function showInstalledPackages(ctx: ExtensionCommandContext, pi: Extension
 
   if (!ctx.hasUI) {
     // Non-interactive mode: just list packages
-    const lines = packages.map((p) => `${p.name}${p.version ? ` @${p.version}` : ""} (${p.scope})`);
+    const lines = packages.map((p, index) => formatInstalledPackageLabel(p, index));
     console.log(lines.join("\n"));
     return;
   }
 
-  const items = packages.map((p) => `${p.name}${p.version ? ` @${p.version}` : ""} (${p.scope})`);
+  const items = packages.map((p, index) => formatInstalledPackageLabel(p, index));
 
   items.push("[Update all packages]");
   items.push("[Back]");
@@ -1283,11 +1296,11 @@ async function showInstalledPackages(ctx: ExtensionCommandContext, pi: Extension
   if (picked === "[Update all packages]") {
     await updatePackages(ctx, pi);
   } else if (picked === "[Back]") {
-    await showInteractive(ctx, pi);
+    return;
   } else {
-    const packageName = picked.split(" @")[0]?.split(" (")[0];
-    if (!packageName) return;
-    const pkg = packages.find((p) => p.name === packageName);
+    const indexMatch = picked.match(/^\[(\d+)\]\s+/);
+    const selectedIndex = indexMatch ? Number(indexMatch[1]) - 1 : -1;
+    const pkg = selectedIndex >= 0 ? packages[selectedIndex] : undefined;
     if (pkg) {
       await showPackageActions(pkg.source, pkg, ctx, pi);
     }
@@ -1448,7 +1461,6 @@ async function getInstalledPackages(
 
   const packages: InstalledPackage[] = [];
   const seenSources = new Set<string>();
-  const seenNames = new Set<string>();
 
   const lines = text.split("\n");
   let currentScope: "global" | "project" = "global";
@@ -1467,7 +1479,7 @@ async function getInstalledPackages(
     }
 
     // Parse package lines
-    const match = trimmed.match(/^[-•]?\s*(npm:|git:|https?:|\/|\.\/)(.+)$/);
+    const match = trimmed.match(/^[-•]?\s*(npm:|git:|https?:|\/|\.\/|\.\.\/)(.+)$/);
     if (match?.[1] && match[2]) {
       const fullSource = match[1] + match[2];
 
@@ -1514,10 +1526,6 @@ async function getInstalledPackages(
         }
       }
 
-      // Deduplicate by package name (handles same pkg in both npm and local)
-      if (seenNames.has(name)) continue;
-      seenNames.add(name);
-
       const pkg: InstalledPackage = { source, name, scope: currentScope };
       if (version !== undefined) {
         pkg.version = version;
@@ -1559,6 +1567,11 @@ function formatEntry(entry: ExtensionEntry): string {
   const state = entry.state === "enabled" ? "on " : "off";
   const scope = entry.scope === "global" ? "G" : "P";
   return `[${state}] [${scope}] ${entry.displayName} - ${entry.summary}`;
+}
+
+function formatInstalledPackageLabel(pkg: InstalledPackage, index?: number): string {
+  const base = `${pkg.name}${pkg.version ? ` @${pkg.version}` : ""} (${pkg.scope})`;
+  return index !== undefined ? `[${index + 1}] ${base}` : base;
 }
 
 function truncate(text: string, maxLength: number): string {
