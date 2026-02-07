@@ -1,6 +1,6 @@
 # 🔧 pi-extmgr
 
-<img width="2560" height="369" alt="image" src="https://github.com/user-attachments/assets/669e58c8-77aa-44d6-90f5-6ff981f2a1df" />
+<img width="2560" height="369" alt="image" src="https://i.imgur.com/nP5rJPC.png" />
 
 > Enhanced UI/UX for managing Pi extensions and discovering community packages
 
