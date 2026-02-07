@@ -17,9 +17,19 @@
 ### 🎨 Interactive TUI Interface
 
 - **Beautiful themed interface** with color-coded status indicators
+- **Unified view** - local extensions and npm/git packages in one screen
 - **Keyboard-driven navigation** - fast and efficient
 - **Real-time previews** with package descriptions
 - **Context-aware help** - press `?` anywhere for shortcuts
+
+### 📋 Unified Extension Manager
+
+All your extensions in one place:
+
+- **Local extensions**: `● enabled` / `○ disabled` with `[G]` global or `[P]` project scope
+- **Installed packages**: `📦` icon with name@version
+- **Visual distinction** between toggle-able locals and action-based packages
+- **Smart deduplication** - packages already managed as local extensions are hidden
 
 ### 🔍 Smart Package Discovery
 
@@ -41,9 +51,10 @@
 ### ⚡ Quick Extension Management
 
 - **Enable/disable extensions** with staging (preview before applying)
-- **Visual change indicators** (\*) show pending modifications
+- **Package actions** - update/remove/view details without leaving the manager
+- **Visual change indicators** (`*`) show pending modifications
 - **Bulk operations** - update all packages at once
-- **Scope indicators**: Global (G) vs Project (P) extensions
+- **Scope indicators**: Global (G) vs Project (P) for all items
 
 ### 🎯 Quality of Life
 
@@ -51,7 +62,7 @@
 - **Status bar integration** - shows installed package count
 - **Keyboard shortcut**: `Ctrl+Shift+E` opens extension manager
 - **Non-interactive mode** - works in scripts and CI
-- **Smart deduplication** - handles same package in multiple scopes
+- **Parallel data loading** - local extensions and packages fetched simultaneously
 
 ## 🚀 Installation
 
@@ -70,25 +81,37 @@ Then reload Pi:
 ### Interactive Mode (Recommended)
 
 ```
-/extensions              # Open full interactive manager
+/extensions              # Open unified interactive manager
 ```
 
-#### Local Extensions Manager
+The unified view displays:
 
-Manage your local extensions with an interactive list:
+- **Local extensions** first (toggle-able)
+- **Installed packages** second (action-based)
+- Sorted alphabetically within each group
 
-| Key           | Action                  |
-| ------------- | ----------------------- |
-| `↑↓`          | Navigate extensions     |
-| `Space/Enter` | Toggle enabled/disabled |
-| `S`           | Save changes            |
-| `I`           | View installed packages |
-| `R`           | Browse remote packages  |
-| `M`           | Return to command line  |
-| `?`           | Show help               |
-| `Esc`         | Cancel                  |
+#### Keyboard Shortcuts
+
+| Key           | Action                                              |
+| ------------- | --------------------------------------------------- |
+| `↑↓`          | Navigate items                                      |
+| `Space/Enter` | Toggle local extension on/off                       |
+| `S`           | Save changes to local extensions                    |
+| `A`           | Actions on selected package (update/remove/details) |
+| `R`           | Browse remote packages                              |
+| `?` / `H`     | Show help                                           |
+| `Esc`         | Cancel / Exit                                       |
 
 **Staged Changes**: Toggle extensions on/off without immediate effect. Press `S` to apply all changes at once. Pending changes show `*` next to the extension name.
+
+#### Package Actions
+
+When a package is selected, press `A` to:
+
+- **Update package** - fetch latest version
+- **Remove package** - uninstall completely
+- **View details** - see version, source, scope
+- **Back to manager** - return to unified view
 
 #### Community Package Browser
 
@@ -101,15 +124,17 @@ Browse and install from npm:
 | `N`     | Next page            |
 | `P`     | Previous page        |
 | `R`     | Refresh search       |
-| `M`     | Back to menu         |
 | `Esc`   | Cancel               |
 
 ### Command Reference
 
 ```bash
-# Local Extension Management
+# Unified Manager (Recommended)
+/extensions                   # Open unified interactive manager
+
+# Legacy Commands
 /extensions list              # List local extensions (text output)
-/extensions local             # Open interactive manager (default)
+/extensions installed         # Redirects to unified view
 
 # Package Discovery
 /extensions remote            # Browse community packages
@@ -117,7 +142,6 @@ Browse and install from npm:
 /extensions search <query>    # Search npm for packages
 
 # Package Management
-/extensions installed         # List installed packages with actions
 /extensions install <source>  # Install from npm/git/path
 /extensions remove [source]   # Remove package (interactive if no source)
 /extensions uninstall [source]# Alias for remove
@@ -162,41 +186,46 @@ All commands work in non-interactive environments (CI, scripts):
 
 - `Ctrl+Shift+E` - Open Extensions Manager
 
-### In Interactive Mode
+### In Unified Manager
 
-- `↑/↓` or `K/J` - Navigate
-- `Enter/Space` - Select/Toggle
-- `S` - Save changes
-- `I` - Installed packages
-- `R` - Remote packages
-- `M` - Main menu / Back
-- `?` or `H` - Help
-- `Esc` - Cancel/Back
+| Key            | Action                          |
+| -------------- | ------------------------------- |
+| `↑/↓` or `K/J` | Navigate                        |
+| `Enter/Space`  | Toggle local extension          |
+| `S`            | Save changes                    |
+| `A`            | Package actions (update/remove) |
+| `R`            | Browse remote packages          |
+| `?` / `H`      | Help                            |
+| `Esc`          | Cancel / Exit                   |
 
 ## 🏗️ Extension Discovery
 
-pi-extmgr discovers extensions from two locations:
+pi-extmgr discovers extensions from multiple sources:
 
-### Global Extensions
+### Local Extensions
 
 ```
-~/.pi/agent/extensions/
+~/.pi/agent/extensions/              # Global
 ├── my-extension.ts
 ├── disabled-extension.ts.disabled
 └── my-extension/
     └── index.ts
-```
 
-### Project Extensions
-
-```
-./.pi/extensions/
+./.pi/extensions/                    # Project
 ├── project-tool.ts
 └── local-helper/
     └── index.ts
 ```
 
-**Naming**: Append `.disabled` to disable an extension without removing it.
+### Installed Packages
+
+Managed by `pi install`:
+
+- npm packages (`npm:package@version`)
+- git packages (`git:https://...`)
+- Stored in pi's package cache
+
+**Naming**: Append `.disabled` to disable a local extension without removing it.
 
 ## 🔧 Configuration
 
@@ -220,9 +249,19 @@ export default function myTheme(pi: ExtensionAPI) {
 
 ## 📝 Example Workflows
 
-### Installing a New Extension
+### Managing All Extensions
 
 1. Press `Ctrl+Shift+E` or type `/extensions`
+2. See all local extensions and installed packages in one view
+3. Navigate with `↑↓`
+4. For local extensions: press `Space` to toggle on/off
+5. For packages: press `A` for actions (update/remove)
+6. Press `S` to save any changes to local extensions
+7. Confirm reload to apply changes
+
+### Installing a New Extension
+
+1. Type `/extensions` to open manager
 2. Press `R` for remote packages
 3. Browse or search for the extension
 4. Press `Enter` on the desired package
@@ -242,10 +281,18 @@ export default function myTheme(pi: ExtensionAPI) {
     └── package.json           # Original package.json preserved
 ```
 
-### Disabling an Extension Temporarily
+### Updating a Package
+
+1. Type `/extensions` to open unified manager
+2. Navigate to the installed package
+3. Press `A` for actions
+4. Select "Update package"
+5. Confirm reload if updated
+
+### Disabling a Local Extension Temporarily
 
 1. Type `/extensions` to open manager
-2. Navigate to the extension with `↑↓`
+2. Navigate to the local extension with `↑↓`
 3. Press `Space` to toggle it off
 4. Press `S` to save
 5. Confirm reload
@@ -254,10 +301,11 @@ The extension remains installed but won't load until re-enabled.
 
 ### Updating All Packages
 
-1. Type `/extensions installed`
-2. Select "[Update all packages]"
-3. Wait for updates to complete
-4. Reload Pi if updates were applied
+1. Type `/extensions` to open unified manager
+2. Navigate to any installed package
+3. Press `A` for actions
+4. Select "Update package"
+5. Or use command: `/extensions install npm:pi-extmgr` then select "[Update all packages]"
 
 ## 🐛 Troubleshooting
 
@@ -282,9 +330,9 @@ Check that the file has a `.ts` or `.js` extension and is in one of the discover
 - For git installs, ensure git is available
 - Verify the package has the `pi-package` keyword for browsing
 
-### Same package showing twice in installed list
+### Back to manager closes everything
 
-This can happen when `pi list` returns the same package in different formats (e.g., both `npm:package@1.0.0` and the full node_modules path). The extension now automatically deduplicates by package name.
+Fixed! Pressing "Back to manager" now correctly returns to the unified view instead of closing.
 
 ## 🤝 Contributing
 
