@@ -17,18 +17,20 @@ export interface ExtensionEntry {
 
 export interface NpmPackage {
   name: string;
-  version?: string;
-  description?: string;
-  keywords?: string[];
-  date?: string;
+  version?: string | undefined;
+  description?: string | undefined;
+  keywords?: string[] | undefined;
+  date?: string | undefined;
+  size?: number | undefined; // Package size in bytes
 }
 
 export interface InstalledPackage {
   source: string;
   name: string;
-  version?: string;
+  version?: string | undefined;
   scope: "global" | "project";
-  description?: string;
+  description?: string | undefined;
+  size?: number | undefined; // Package size in bytes
 }
 
 export interface UnifiedItem {
@@ -38,14 +40,15 @@ export interface UnifiedItem {
   summary: string;
   scope: Scope | "global" | "project";
   // Local extension fields
-  state?: State;
-  activePath?: string;
-  disabledPath?: string;
-  originalState?: State;
+  state?: State | undefined;
+  activePath?: string | undefined;
+  disabledPath?: string | undefined;
+  originalState?: State | undefined;
   // Package fields
-  source?: string;
+  source?: string | undefined;
   version?: string | undefined;
   description?: string | undefined;
+  size?: number | undefined; // Package size in bytes
 }
 
 export interface SearchCache {

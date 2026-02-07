@@ -2,9 +2,7 @@
  * Remote package browsing UI
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Container, SelectList, Text, Spacer, type SelectItem } from "@mariozechner/pi-tui";
-import type { BrowseAction, MenuAction, NpmPackage } from "../types/index.js";
+import type { BrowseAction, NpmPackage } from "../types/index.js";
 import { PAGE_SIZE } from "../constants.js";
 import { truncate } from "../utils/format.js";
 import {
@@ -14,7 +12,6 @@ import {
   isCacheValid,
 } from "../packages/discovery.js";
 import { installPackage, installPackageLocally } from "../packages/install.js";
-import { showHelp } from "./help.js";
 
 export async function showRemote(
   args: string,
@@ -52,88 +49,22 @@ export async function showRemote(
 }
 
 async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
-  const result = await ctx.ui.custom<MenuAction>((tui, theme, _kb, done) => {
-    const container = new Container();
+  if (!ctx.hasUI) return;
 
-    // Header
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Community Packages")), 2, 1));
-    container.addChild(
-      new Text(theme.fg("muted", "Use /extensions for unified view of installed items"), 2, 0)
-    );
-    container.addChild(new Spacer(1));
+  const choice = await ctx.ui.select("Community Packages", [
+    "🔍 Browse pi packages",
+    "🔎 Search packages",
+    "📥 Install by source",
+  ]);
 
-    const menuItems: SelectItem[] = [
-      {
-        value: "browse",
-        label: "🔍 Browse pi packages",
-        description: "Discover community packages",
-      },
-      { value: "search", label: "🔎 Search packages", description: "Search npm with custom query" },
-      { value: "install", label: "📥 Install by source", description: "npm:, git:, or local path" },
-    ];
+  if (!choice) return;
 
-    const selectList = new SelectList(menuItems, menuItems.length + 2, {
-      selectedPrefix: (t: string) => theme.fg("accent", t),
-      selectedText: (t: string) => theme.fg("accent", theme.bold(t)),
-      description: (t: string) => theme.fg("dim", t),
-      scrollInfo: (t: string) => theme.fg("muted", t),
-      noMatch: (t: string) => theme.fg("warning", t),
-    });
-
-    selectList.onSelect = (item: SelectItem) => done(item.value as MenuAction);
-    selectList.onCancel = () => done("cancel");
-
-    container.addChild(selectList);
-    container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(
-        theme.fg("dim", "↑↓ Navigate • Enter Select • M Main Menu • ? Help • Esc Cancel"),
-        2,
-        0
-      )
-    );
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-    return {
-      render(width: number) {
-        return container.render(width);
-      },
-      invalidate() {
-        container.invalidate();
-      },
-      handleInput(data: string) {
-        if (data === "m" || data === "M") {
-          done("main");
-          return;
-        }
-        if (data === "?" || data === "h" || data === "H") {
-          done("help");
-          return;
-        }
-        selectList.handleInput(data);
-        tui.requestRender();
-      },
-    };
-  });
-
-  switch (result) {
-    case "browse":
-      await browseRemotePackages(ctx, "keywords:pi-package", pi);
-      break;
-    case "search":
-      await promptSearch(ctx, pi);
-      break;
-    case "install":
-      await promptInstall(ctx, pi);
-      break;
-    case "main":
-      return;
-    case "help":
-      showHelp(ctx);
-      break;
-    case "cancel":
-      return;
+  if (choice.includes("Browse")) {
+    await browseRemotePackages(ctx, "keywords:pi-package", pi);
+  } else if (choice.includes("Search")) {
+    await promptSearch(ctx, pi);
+  } else if (choice.includes("Install")) {
+    await promptInstall(ctx, pi);
   }
 }
 
@@ -178,116 +109,55 @@ export async function browseRemotePackages(
     return;
   }
 
-  // Build selection items with descriptions
-  const selectItems: SelectItem[] = packages.map((p) => ({
-    value: p.name,
-    label: themeLabel("accent", `${p.name}${p.version ? ` @${p.version}` : ""}`),
-    description: truncate(p.description || "No description", 60),
-  }));
-
   // Add navigation options
   const showLoadMore = totalResults >= PAGE_SIZE && packages.length === PAGE_SIZE;
   const showPrevious = offset > 0;
-
-  if (showPrevious) {
-    selectItems.push({
-      value: "__prev",
-      label: themeLabel("warning", "◀  Previous page"),
-      description: "",
-    });
-  }
-  if (showLoadMore) {
-    selectItems.push({
-      value: "__next",
-      label: themeLabel("success", "▶  Next page"),
-      description: `Showing ${offset + 1}-${offset + packages.length}`,
-    });
-  }
-  selectItems.push({
-    value: "__refresh",
-    label: themeLabel("muted", "🔄 Refresh search"),
-    description: "",
-  });
-  selectItems.push({
-    value: "__menu",
-    label: themeLabel("muted", "◀  Back to menu"),
-    description: "",
-  });
 
   const titleText =
     offset > 0
       ? `Search Results (${offset + 1}-${offset + packages.length})`
       : `Search: ${truncate(query, 40)}`;
 
-  // Use custom SelectList for better visuals
-  const result = await ctx.ui.custom<BrowseAction>((tui, theme, _kb, done) => {
-    const container = new Container();
+  // Use simple select instead of custom component to avoid hanging issues
+  const selectItems: string[] = packages.map(
+    (p) =>
+      `${p.name}${p.version ? ` @${p.version}` : ""} - ${truncate(p.description || "No description", 50)}`
+  );
 
-    // Header with border
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold(titleText)), 2, 1));
-    container.addChild(new Spacer(1));
+  // Add navigation options
+  if (showPrevious) {
+    selectItems.push("◀  Previous page");
+  }
+  if (showLoadMore) {
+    selectItems.push(`▶  Next page (${offset + 1}-${offset + packages.length})`);
+  }
+  selectItems.push("🔄 Refresh search");
+  selectItems.push("← Back to menu");
 
-    // SelectList with themed options
-    const selectList = new SelectList(selectItems, Math.min(selectItems.length, 15), {
-      selectedPrefix: (t: string) => theme.fg("accent", t),
-      selectedText: (t: string) => theme.fg("accent", theme.bold(t)),
-      description: (t: string) => theme.fg("dim", t),
-      scrollInfo: (t: string) => theme.fg("muted", t),
-      noMatch: (t: string) => theme.fg("warning", t),
-    });
+  const choice = await ctx.ui.select(titleText, selectItems);
 
-    selectList.onSelect = (item: SelectItem) => {
-      if (item.value === "__prev") {
-        done({ type: "prev" });
-      } else if (item.value === "__next") {
-        done({ type: "next" });
-      } else if (item.value === "__refresh") {
-        done({ type: "refresh" });
-      } else if (item.value === "__menu") {
-        done({ type: "menu" });
-      } else {
-        done({ type: "package", name: item.value });
-      }
-    };
+  if (!choice) {
+    return; // User cancelled
+  }
 
-    selectList.onCancel = () => done({ type: "cancel" });
-
-    container.addChild(selectList);
-    container.addChild(new Spacer(1));
-
-    // Help text
-    container.addChild(
-      new Text(theme.fg("dim", "↑↓ Navigate • Enter Select • M Main • ? Help • Esc Cancel"), 2, 0)
-    );
-    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-    return {
-      render(width: number) {
-        return container.render(width);
-      },
-      invalidate() {
-        container.invalidate();
-      },
-      handleInput(data: string) {
-        if (data === "m" || data === "M") {
-          done({ type: "main" });
-          return;
-        }
-        if (data === "?" || data === "h" || data === "H") {
-          done({ type: "help" });
-          return;
-        }
-        selectList.handleInput(data);
-        tui.requestRender();
-      },
-    };
-  });
+  // Determine action based on selection
+  let result: BrowseAction;
+  if (choice.includes("◀  Previous")) {
+    result = { type: "prev" };
+  } else if (choice.includes("▶  Next")) {
+    result = { type: "next" };
+  } else if (choice.includes("🔄 Refresh")) {
+    result = { type: "refresh" };
+  } else if (choice.includes("← Back")) {
+    result = { type: "menu" };
+  } else {
+    // Extract package name from the choice (format: "name @version - description")
+    const pkgName = choice.split(" ")[0] ?? "";
+    result = { type: "package", name: pkgName };
+  }
 
   // Handle result
   switch (result.type) {
-    case "cancel":
-      return;
     case "prev":
       await browseRemotePackages(ctx, query, pi, Math.max(0, offset - PAGE_SIZE));
       return;
@@ -300,11 +170,6 @@ export async function browseRemotePackages(
       return;
     case "menu":
       await showRemoteMenu(ctx, pi);
-      return;
-    case "main":
-      return;
-    case "help":
-      showHelp(ctx);
       return;
     case "package":
       await showPackageDetails(result.name, ctx, pi);
@@ -396,8 +261,4 @@ async function promptInstall(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pr
   const source = await ctx.ui.input("Install package", "npm:@scope/pkg or git:https://...");
   if (!source) return;
   await installPackage(source.trim(), ctx, pi);
-}
-
-function themeLabel(_color: string, text: string): string {
-  return text;
 }

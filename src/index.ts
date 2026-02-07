@@ -12,6 +12,8 @@ import { showHelp } from "./ui/help.js";
 import { installPackage } from "./packages/install.js";
 import { removePackage, promptRemove, showInstalledPackagesList } from "./packages/management.js";
 import { getInstalledPackages } from "./packages/discovery.js";
+import { getRecentChanges, formatChangeEntry, getChangeStats } from "./utils/history.js";
+import { clearCache } from "./utils/cache.js";
 
 export default function extensionsManager(pi: ExtensionAPI) {
   pi.registerCommand("extensions", {
@@ -27,6 +29,9 @@ export default function extensionsManager(pi: ExtensionAPI) {
         { value: "install", description: "Install a package" },
         { value: "remove", description: "Remove an installed package" },
         { value: "uninstall", description: "Remove an installed package (alias)" },
+        { value: "history", description: "View extension change history" },
+        { value: "stats", description: "View extension manager statistics" },
+        { value: "clear-cache", description: "Clear metadata cache" },
       ];
 
       const safePrefix = (prefix ?? "").toLowerCase();
@@ -81,6 +86,15 @@ export default function extensionsManager(pi: ExtensionAPI) {
           } else {
             await promptRemove(ctx, pi);
           }
+          break;
+        case "history":
+          showHistory(ctx, pi);
+          break;
+        case "stats":
+          await showStats(ctx, pi);
+          break;
+        case "clear-cache":
+          await clearMetadataCache(ctx, pi);
           break;
         default:
           // If it looks like a package source, try to install it
@@ -183,3 +197,65 @@ async function handleNonInteractive(
 }
 
 export { showHelp };
+
+function showHistory(ctx: ExtensionCommandContext, _pi: ExtensionAPI): void {
+  const changes = getRecentChanges(ctx, 20);
+
+  if (changes.length === 0) {
+    const msg = "No extension changes recorded in this session.";
+    if (ctx.hasUI) {
+      ctx.ui.notify(msg, "info");
+    } else {
+      console.log(msg);
+    }
+    return;
+  }
+
+  const lines = changes.map(formatChangeEntry);
+  const output = ["Extension Change History (recent 20):", "", ...lines].join("\n");
+
+  if (ctx.hasUI) {
+    ctx.ui.notify(output, "info");
+  } else {
+    console.log(output);
+  }
+}
+
+async function showStats(ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
+  const stats = getChangeStats(ctx);
+  const packages = await getInstalledPackages(ctx, pi);
+
+  const lines = [
+    "Extension Manager Statistics",
+    "",
+    `Installed packages: ${packages.length}`,
+    `Session changes: ${stats.total}`,
+    `  - Successful: ${stats.successful}`,
+    `  - Failed: ${stats.failed}`,
+    "",
+    "Changes by type:",
+    `  - Extension toggles: ${stats.byAction.extension_toggle}`,
+    `  - Package installs: ${stats.byAction.package_install}`,
+    `  - Package updates: ${stats.byAction.package_update}`,
+    `  - Package removals: ${stats.byAction.package_remove}`,
+  ];
+
+  const output = lines.join("\n");
+
+  if (ctx.hasUI) {
+    ctx.ui.notify(output, "info");
+  } else {
+    console.log(output);
+  }
+}
+
+async function clearMetadataCache(ctx: ExtensionCommandContext, _pi: ExtensionAPI): Promise<void> {
+  await clearCache();
+
+  const msg = "Metadata cache cleared.";
+  if (ctx.hasUI) {
+    ctx.ui.notify(msg, "info");
+  } else {
+    console.log(msg);
+  }
+}

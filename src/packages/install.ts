@@ -1,12 +1,13 @@
 /**
  * Package installation logic
  */
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { normalizePackageSource } from "../utils/format.js";
 import { clearSearchCache } from "./discovery.js";
+import { logPackageInstall } from "../utils/history.js";
 
 export async function installPackage(
   source: string,
@@ -58,6 +59,8 @@ export async function installPackage(
 
   if (res.code !== 0) {
     const errorMsg = `Install failed:\n${res.stderr || res.stdout || `exit ${res.code}`}`;
+    // Log failed installation
+    logPackageInstall(pi, normalized, normalized, undefined, "global", false, errorMsg);
     if (ctx.hasUI) {
       ctx.ui.notify(errorMsg, "error");
     } else {
@@ -67,6 +70,9 @@ export async function installPackage(
   }
 
   clearSearchCache();
+
+  // Log successful installation
+  logPackageInstall(pi, normalized, normalized, undefined, "global", true);
 
   if (ctx.hasUI) {
     ctx.ui.notify(`Installed ${normalized}`, "info");
@@ -381,6 +387,3 @@ export async function installPackageLocally(
     }
   }
 }
-
-// Need to import access for the installPackageLocally function
-import { access } from "node:fs/promises";

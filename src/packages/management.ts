@@ -4,7 +4,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { InstalledPackage } from "../types/index.js";
 import { getInstalledPackages, clearSearchCache } from "./discovery.js";
-import { formatInstalledPackageLabel } from "../utils/format.js";
+import { formatInstalledPackageLabel, formatBytes } from "../utils/format.js";
+import { logPackageUpdate, logPackageRemove } from "../utils/history.js";
 
 export async function updatePackage(
   source: string,
@@ -21,6 +22,8 @@ export async function updatePackage(
 
   if (res.code !== 0) {
     const errorMsg = `Update failed: ${res.stderr || res.stdout || `exit ${res.code}`}`;
+    // Log failed update
+    logPackageUpdate(pi, source, source, undefined, undefined, false, errorMsg);
     if (ctx.hasUI) {
       ctx.ui.notify(errorMsg, "error");
     } else {
@@ -37,7 +40,12 @@ export async function updatePackage(
     } else {
       console.log(msg);
     }
+    // Log skipped update (not an error, just no change)
+    logPackageUpdate(pi, source, source, undefined, undefined, true);
   } else {
+    // Log successful update
+    logPackageUpdate(pi, source, source, undefined, undefined, true);
+
     if (ctx.hasUI) {
       ctx.ui.notify(`Updated ${source}`, "info");
 
@@ -130,6 +138,8 @@ export async function removePackage(
 
   if (res.code !== 0) {
     const errorMsg = `Remove failed: ${res.stderr || res.stdout || `exit ${res.code}`}`;
+    // Log failed removal
+    logPackageRemove(pi, source, source, false, errorMsg);
     if (ctx.hasUI) {
       ctx.ui.notify(errorMsg, "error");
     } else {
@@ -140,17 +150,26 @@ export async function removePackage(
 
   clearSearchCache();
 
+  // Log successful removal
+  logPackageRemove(pi, source, source, true);
+
   if (ctx.hasUI) {
-    ctx.ui.notify(`Removed ${source}`, "info");
+    ctx.ui.notify(
+      `Removed ${source}\n\n⚠️  Extension will be unloaded after restarting pi.`,
+      "info"
+    );
 
-    const shouldReload = await ctx.ui.confirm("Reload Required", "Package removed. Reload pi now?");
+    const shouldExit = await ctx.ui.confirm(
+      "Restart Required",
+      "Package removed. Commands may still work until you restart pi. Exit now?"
+    );
 
-    if (shouldReload) {
-      ctx.ui.setEditorText("/reload");
+    if (shouldExit) {
+      ctx.shutdown();
     }
   } else {
     console.log(`Removed ${source}`);
-    console.log("Run /reload to apply changes.");
+    console.log("Note: Extension commands may still work until you restart pi.");
   }
 }
 
@@ -216,8 +235,9 @@ export async function showPackageActions(
   } else if (choice.startsWith("Update")) {
     await updatePackage(pkg.source, ctx, pi);
   } else if (choice.includes("details")) {
+    const sizeStr = pkg.size !== undefined ? `\nSize: ${formatBytes(pkg.size)}` : "";
     ctx.ui.notify(
-      `Name: ${pkg.name}\nVersion: ${pkg.version || "unknown"}\nSource: ${pkg.source}\nScope: ${pkg.scope}`,
+      `Name: ${pkg.name}\nVersion: ${pkg.version || "unknown"}\nSource: ${pkg.source}\nScope: ${pkg.scope}${sizeStr}`,
       "info"
     );
     // Show actions again

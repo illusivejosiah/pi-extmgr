@@ -30,12 +30,37 @@ export function isCacheValid(query: string): boolean {
   return Date.now() - searchCache.timestamp < CACHE_TTL;
 }
 
+// Import persistent cache
+import {
+  getCachedSearch,
+  setCachedSearch,
+  getCachedPackage,
+  setCachedPackage,
+  getPackageDescriptions,
+  getCachedPackageSize,
+  setCachedPackageSize,
+} from "../utils/cache.js";
+
 export async function searchNpmPackages(
   query: string,
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI
 ): Promise<NpmPackage[]> {
   const searchLimit = Math.min(PAGE_SIZE + 10, 50);
+
+  // Check persistent cache first
+  const cached = await getCachedSearch(query);
+  if (cached && cached.length > 0) {
+    if (ctx.hasUI) {
+      ctx.ui.notify(`Using ${cached.length} cached results`, "info");
+    }
+    return cached;
+  }
+
+  if (ctx.hasUI) {
+    ctx.ui.notify(`Searching npm for "${query}"...`, "info");
+  }
+
   const res = await pi.exec("npm", ["search", "--json", `--searchlimit=${searchLimit}`, query], {
     timeout: 20000,
     cwd: ctx.cwd,
@@ -48,13 +73,18 @@ export async function searchNpmPackages(
   try {
     const parsed = JSON.parse(res.stdout || "[]") as NpmPackage[];
     // Filter to only pi packages when browsing
-    return parsed.filter((p) => {
+    const filtered = parsed.filter((p) => {
       if (!p?.name) return false;
       if (query.includes("keywords:pi-package")) {
         return p.keywords?.includes("pi-package");
       }
       return true;
     });
+
+    // Cache the results
+    await setCachedSearch(query, filtered);
+
+    return filtered;
   } catch {
     throw new Error("Failed to parse npm search output");
   }
@@ -175,53 +205,118 @@ export async function getInstalledPackages(
     }
   }
 
-  // Fetch descriptions for packages in parallel
-  await addPackageDescriptions(packages, ctx, pi);
+  // Fetch metadata (descriptions and sizes) for packages in parallel
+  await addPackageMetadata(packages, ctx, pi);
 
   return packages;
 }
 
-async function addPackageDescriptions(
+/**
+ * Fetch package size from npm view
+ */
+async function fetchPackageSize(
+  pkgName: string,
+  ctx: ExtensionCommandContext | ExtensionContext,
+  pi: ExtensionAPI
+): Promise<number | undefined> {
+  // Check cache first
+  const cachedSize = await getCachedPackageSize(pkgName);
+  if (cachedSize !== undefined) return cachedSize;
+
+  try {
+    // Try to get unpacked size from npm view
+    const res = await pi.exec("npm", ["view", pkgName, "dist.unpackedSize", "--json"], {
+      timeout: 5000,
+      cwd: ctx.cwd,
+    });
+    if (res.code === 0) {
+      try {
+        const size = JSON.parse(res.stdout) as number;
+        if (typeof size === "number" && size > 0) {
+          await setCachedPackageSize(pkgName, size);
+          return size;
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  } catch {
+    // Silently ignore errors
+  }
+  return undefined;
+}
+
+async function addPackageMetadata(
   packages: InstalledPackage[],
   ctx: ExtensionCommandContext | ExtensionContext,
   pi: ExtensionAPI
 ): Promise<void> {
-  // Process in batches to avoid overwhelming the system
+  // First, try to get descriptions from cache
+  const cachedDescriptions = await getPackageDescriptions(packages);
+  for (const [source, description] of cachedDescriptions) {
+    const pkg = packages.find((p) => p.source === source);
+    if (pkg) pkg.description = description;
+  }
+
+  // Process remaining packages in batches
   const batchSize = 5;
   for (let i = 0; i < packages.length; i += batchSize) {
     const batch = packages.slice(i, i + batchSize);
     await Promise.all(
       batch.map(async (pkg) => {
+        // Skip if already has description from cache
+        const needsDescription = !pkg.description;
+        const needsSize = pkg.size === undefined && pkg.source.startsWith("npm:");
+
+        if (!needsDescription && !needsSize) return;
+
         try {
           if (pkg.source.endsWith(".ts") || pkg.source.endsWith(".js")) {
             // For local files, read description from file
-            pkg.description = await readSummary(pkg.source);
+            if (needsDescription) {
+              pkg.description = await readSummary(pkg.source);
+            }
           } else if (pkg.source.startsWith("npm:")) {
-            // For npm packages, try to get description from npm view
             const pkgName = pkg.source.slice(4).split("@")[0];
             if (pkgName) {
-              const res = await pi.exec("npm", ["view", pkgName, "description", "--json"], {
-                timeout: 5000,
-                cwd: ctx.cwd,
-              });
-              if (res.code === 0) {
-                try {
-                  const desc = JSON.parse(res.stdout) as string;
-                  if (typeof desc === "string" && desc) {
-                    pkg.description = desc;
+              // Get description
+              if (needsDescription) {
+                const cached = await getCachedPackage(pkgName);
+                if (cached?.description) {
+                  pkg.description = cached.description;
+                } else {
+                  // Fetch from npm and cache it
+                  const res = await pi.exec("npm", ["view", pkgName, "description", "--json"], {
+                    timeout: 5000,
+                    cwd: ctx.cwd,
+                  });
+                  if (res.code === 0) {
+                    try {
+                      const desc = JSON.parse(res.stdout) as string;
+                      if (typeof desc === "string" && desc) {
+                        pkg.description = desc;
+                        // Cache the description
+                        await setCachedPackage(pkgName, { name: pkgName, description: desc });
+                      }
+                    } catch {
+                      // Ignore parse errors
+                    }
                   }
-                } catch {
-                  // Ignore parse errors
                 }
+              }
+
+              // Get size
+              if (needsSize) {
+                pkg.size = await fetchPackageSize(pkgName, ctx, pi);
               }
             }
           } else if (pkg.source.startsWith("git:")) {
-            pkg.description = "git repository";
+            if (needsDescription) pkg.description = "git repository";
           } else {
-            pkg.description = "local package";
+            if (needsDescription) pkg.description = "local package";
           }
         } catch {
-          // Silently ignore description fetch errors
+          // Silently ignore fetch errors
         }
       })
     );

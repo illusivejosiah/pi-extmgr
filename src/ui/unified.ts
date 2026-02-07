@@ -22,6 +22,14 @@ import { showRemote } from "./remote.js";
 import { showHelp } from "./help.js";
 import { discoverExtensions as discoverExt } from "../extensions/discovery.js";
 import { formatEntry as formatExtEntry, truncate } from "../utils/format.js";
+import {
+  getStatusIcon,
+  getPackageIcon,
+  getScopeIcon,
+  getChangeMarker,
+  formatSize,
+} from "./theme.js";
+import { logExtensionToggle } from "../utils/history.js";
 
 export async function showInteractive(
   ctx: ExtensionCommandContext,
@@ -198,6 +206,7 @@ function buildUnifiedItems(
       source: pkg.source,
       version: pkg.version,
       description: pkg.description,
+      size: pkg.size,
     });
   }
 
@@ -266,27 +275,38 @@ function formatUnifiedItemLabel(
   changed = false
 ): string {
   if (item.type === "local") {
-    const statusIcon = state === "enabled" ? theme.fg("success", "●") : theme.fg("error", "○");
-    const scopeIcon = item.scope === "global" ? theme.fg("muted", "G") : theme.fg("accent", "P");
-    const changeMarker = changed ? theme.fg("warning", " *") : "";
+    const statusIcon = getStatusIcon(theme, state === "enabled" ? "enabled" : "disabled");
+    const scopeIcon = getScopeIcon(theme, item.scope);
+    const changeMarker = getChangeMarker(theme, changed);
     const name = theme.bold(item.displayName);
     const summary = theme.fg("dim", item.summary);
     return `${statusIcon} [${scopeIcon}] ${name} - ${summary}${changeMarker}`;
   } else {
-    const pkgIcon = theme.fg("accent", "📦");
-    const scopeIcon = item.scope === "global" ? theme.fg("muted", "G") : theme.fg("accent", "P");
+    const pkgIcon = getPackageIcon(theme, item.source?.startsWith("npm:") ? "npm" : "git");
+    const scopeIcon = getScopeIcon(theme, item.scope as "global" | "project");
     const name = theme.bold(item.displayName);
     const version = item.version ? theme.fg("dim", `@${item.version}`) : "";
-    // Show description if available, otherwise show source type
-    let summaryText = item.description
-      ? item.description
-      : item.source?.startsWith("npm:")
-        ? "npm package"
-        : item.source?.startsWith("git:")
-          ? "git repository"
-          : "local file";
-    summaryText = truncate(summaryText, 50);
-    const summary = theme.fg("dim", summaryText);
+
+    // Build info parts
+    const infoParts: string[] = [];
+
+    // Show description if available
+    if (item.description) {
+      infoParts.push(truncate(item.description, 40));
+    } else if (item.source?.startsWith("npm:")) {
+      infoParts.push("npm");
+    } else if (item.source?.startsWith("git:")) {
+      infoParts.push("git");
+    } else {
+      infoParts.push("local");
+    }
+
+    // Show size if available
+    if (item.size !== undefined) {
+      infoParts.push(formatSize(theme, item.size));
+    }
+
+    const summary = theme.fg("dim", infoParts.join(" • "));
     return `${pkgIcon} [${scopeIcon}] ${name}${version} - ${summary}`;
   }
 }
@@ -348,7 +368,7 @@ async function handleUnifiedAction(
     } => i.type === "local" && !!i.activePath
   );
 
-  const apply = await applyStagedChanges(localItems, staged);
+  const apply = await applyStagedChanges(localItems, staged, pi);
 
   if (apply.errors.length > 0) {
     ctx.ui.notify(
@@ -377,7 +397,11 @@ async function handleUnifiedAction(
   return false;
 }
 
-async function applyStagedChanges(items: UnifiedItem[], staged: Map<string, State>) {
+async function applyStagedChanges(
+  items: UnifiedItem[],
+  staged: Map<string, State>,
+  pi: ExtensionAPI
+) {
   let changed = 0;
   const errors: string[] = [];
 
@@ -395,8 +419,12 @@ async function applyStagedChanges(items: UnifiedItem[], staged: Map<string, Stat
 
     if (result.ok) {
       changed++;
+      // Log the successful toggle
+      logExtensionToggle(pi, item.id, item.originalState, target, true);
     } else {
       errors.push(`${item.id}: ${result.error}`);
+      // Log the failed toggle
+      logExtensionToggle(pi, item.id, item.originalState, target, false, result.error);
     }
   }
 
