@@ -20,10 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - name: Checkout tested commit
+      - name: Checkout tested branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -49,7 +50,7 @@ jobs:
         run: 'npm version patch -m "chore(release): %s [skip-release]"'
 
       - name: Push version commit + tag
-        run: git push --follow-tags
+        run: git push origin HEAD:${{ github.event.workflow_run.head_branch }} --follow-tags
 
       - name: Publish to npm
         run: npm publish --access public
