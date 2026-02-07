@@ -118,7 +118,7 @@ export default function extensionsManager(pi: ExtensionAPI) {
           await showRemote(rest.join(" "), ctx, pi);
           break;
         case "installed":
-          await showInstalledPackages(ctx, pi);
+          await showInstalledPackagesLegacy(ctx, pi);
           break;
         case "search":
           await searchPackages(rest.join(" "), ctx, pi);
@@ -187,7 +187,8 @@ async function handleNonInteractive(args: string, ctx: ExtensionCommandContext, 
       await showListOnly(ctx);
       break;
     case "installed":
-      await showInstalledPackages(ctx, pi);
+      // Legacy: show package list in non-interactive mode
+      await showInstalledPackagesList(ctx, pi);
       break;
     default:
       console.log("Extensions Manager (non-interactive mode)");
@@ -232,72 +233,163 @@ async function showInteractive(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
   }
 }
 
+// Unified item type for local extensions and installed packages
+interface UnifiedItem {
+  type: "local" | "package";
+  id: string;
+  displayName: string;
+  summary: string;
+  scope: Scope | "global" | "project";
+  // Local extension fields
+  state?: State;
+  activePath?: string;
+  disabledPath?: string;
+  originalState?: State;
+  // Package fields
+  source?: string;
+  version?: string | undefined;
+}
+
 async function showInteractiveOnce(
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI
 ): Promise<boolean> {
-  const entries = await discoverExtensions(ctx.cwd);
+  // Load both local extensions and installed packages in parallel for performance
+  const [localEntries, installedPackages] = await Promise.all([
+    discoverExtensions(ctx.cwd),
+    getInstalledPackages(ctx, pi),
+  ]);
 
-  // If no local extensions, offer to browse remote
-  if (entries.length === 0) {
-    const choice = await ctx.ui.select("No local extensions found", [
+  // Build unified items list
+  const items: UnifiedItem[] = [];
+
+  // Add local extensions
+  for (const entry of localEntries) {
+    items.push({
+      type: "local",
+      id: entry.id,
+      displayName: entry.displayName,
+      summary: entry.summary,
+      scope: entry.scope,
+      state: entry.state,
+      activePath: entry.activePath,
+      disabledPath: entry.disabledPath,
+      originalState: entry.state,
+    });
+  }
+
+  // Add installed packages (filter out duplicates that exist as local extensions)
+  const localPaths = new Set(localEntries.map((e) => e.activePath?.toLowerCase()));
+  for (const pkg of installedPackages) {
+    // Skip if this package is already managed as a local extension
+    const pkgPath = pkg.source.toLowerCase();
+    if (localPaths.has(pkgPath)) continue;
+
+    items.push({
+      type: "package",
+      id: `pkg:${pkg.source}`,
+      displayName: pkg.name,
+      summary: `${pkg.source} (${pkg.scope})`,
+      scope: pkg.scope,
+      source: pkg.source,
+      version: pkg.version,
+    });
+  }
+
+  // Sort: locals first, then packages, both alphabetically
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "local" ? -1 : 1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  // If nothing found, show quick actions
+  if (items.length === 0) {
+    const choice = await ctx.ui.select("No extensions or packages found", [
       "Browse community packages",
-      "List installed packages",
       "Cancel",
     ]);
 
     if (choice === "Browse community packages") {
       await browseRemotePackages(ctx, "keywords:pi-package", pi);
-      return false; // Return to main menu
-    } else if (choice === "List installed packages") {
-      await showInstalledPackages(ctx, pi);
-      return false; // Return to main menu
+      return false;
     }
-    return true; // Exit
+    return true;
   }
 
-  // Staged changes tracking
-  const staged = new Map(entries.map((e) => [e.id, e.state]));
-  const byId = new Map(entries.map((e) => [e.id, e]));
+  // Staged changes tracking for local extensions
+  const staged = new Map<string, State>();
+  const byId = new Map(items.map((item) => [item.id, item]));
 
-  type Action = "cancel" | "apply" | "installed" | "remote" | "help" | "menu";
+  type Action =
+    | { type: "cancel" }
+    | { type: "apply" }
+    | { type: "remote" }
+    | { type: "help" }
+    | { type: "menu" }
+    | { type: "action"; itemId: string };
 
   const result = await ctx.ui.custom<Action>((tui, theme, _keybindings, done) => {
     const container = new Container();
+    const hasLocals = items.some((i) => i.type === "local");
+    const hasPackages = items.some((i) => i.type === "package");
 
     // Header
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Local Extensions Manager")), 2, 0));
+    container.addChild(new Text(theme.fg("accent", theme.bold("Extensions Manager")), 2, 0));
     container.addChild(
-      new Text(theme.fg("muted", "Enable/disable extensions - Changes apply on save"), 2, 0)
+      new Text(
+        theme.fg(
+          "muted",
+          `${items.length} item${items.length === 1 ? "" : "s"} • Space/Enter to toggle local extensions, A for actions on packages`
+        ),
+        2,
+        0
+      )
     );
     container.addChild(new Spacer(1));
 
-    // Settings list for extensions
-    const items: SettingItem[] = entries.map((entry) => ({
-      id: entry.id,
-      label: formatEntryLabel(entry, entry.state, theme),
-      currentValue: entry.state,
-      values: ["enabled", "disabled"],
-    }));
+    // Build settings items
+    const settingsItems: SettingItem[] = items.map((item) => {
+      if (item.type === "local") {
+        const currentState = staged.get(item.id) ?? item.state!;
+        const changed = staged.has(item.id) && staged.get(item.id) !== item.originalState;
+        return {
+          id: item.id,
+          label: formatUnifiedItemLabel(item, currentState, theme, changed),
+          currentValue: currentState,
+          values: ["enabled", "disabled"],
+        };
+      } else {
+        // Package - show as read-only with action indicator
+        return {
+          id: item.id,
+          label: formatUnifiedItemLabel(item, "enabled", theme, false),
+          currentValue: "enabled",
+          values: ["enabled"], // Packages don't toggle, they use actions
+        };
+      }
+    });
 
     const settingsList = new SettingsList(
-      items,
-      Math.min(entries.length + 2, 12),
+      settingsItems,
+      Math.min(items.length + 2, 16),
       getSettingsListTheme(),
       (id: string, newValue: string) => {
-        const entry = byId.get(id);
-        const item = items.find((x) => x.id === id);
-        if (!entry || !item) return;
+        const item = byId.get(id);
+        if (!item || item.type !== "local") return;
 
         const state = newValue as State;
         staged.set(id, state);
-        item.currentValue = state;
-        item.label = formatEntryLabel(entry, state, theme, entry.state !== state);
+
+        const settingsItem = settingsItems.find((x) => x.id === id);
+        if (settingsItem) {
+          const changed = state !== item.originalState;
+          settingsItem.label = formatUnifiedItemLabel(item, state, theme, changed);
+        }
         tui.requestRender();
       },
-      () => done("cancel"),
-      { enableSearch: entries.length > 8 }
+      () => done({ type: "cancel" }),
+      { enableSearch: items.length > 8 }
     );
 
     container.addChild(settingsList);
@@ -305,15 +397,20 @@ async function showInteractiveOnce(
 
     // Footer with keyboard shortcuts
     const hasChanges = Array.from(staged.entries()).some(([id, state]) => {
-      const entry = byId.get(id);
-      return entry && entry.state !== state;
+      const item = byId.get(id);
+      return item?.type === "local" && item.originalState !== state;
     });
 
-    const helpText = hasChanges
-      ? "↑↓ Navigate | Space/Enter Toggle | S Save* | I Installed | R Remote | M Menu | ? Help | Esc Cancel"
-      : "↑↓ Navigate | Space/Enter Toggle | S Save | I Installed | R Remote | M Menu | ? Help | Esc Cancel";
+    const footerParts: string[] = [];
+    footerParts.push("↑↓ Navigate");
+    if (hasLocals) footerParts.push("Space/Enter Toggle");
+    if (hasLocals) footerParts.push(hasChanges ? "S Save*" : "S Save");
+    if (hasPackages) footerParts.push("A Actions");
+    footerParts.push("R Browse");
+    footerParts.push("? Help");
+    footerParts.push("Esc Cancel");
 
-    container.addChild(new Text(theme.fg("dim", helpText), 2, 0));
+    container.addChild(new Text(theme.fg("dim", footerParts.join(" | ")), 2, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -325,23 +422,29 @@ async function showInteractiveOnce(
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.ctrl("s")) || data === "s" || data === "S") {
-          done("apply");
+          done({ type: "apply" });
           return;
         }
-        if (data === "i" || data === "I") {
-          done("installed");
+        if (data === "a" || data === "A") {
+          // Get currently selected item and show actions
+          // Access internal selectedIndex from SettingsList
+          const selIdx = (settingsList as unknown as { selectedIndex: number }).selectedIndex ?? 0;
+          const selectedId = settingsItems[selIdx]?.id ?? settingsItems[0]?.id;
+          if (selectedId) {
+            done({ type: "action", itemId: selectedId });
+          }
           return;
         }
         if (data === "r" || data === "R") {
-          done("remote");
+          done({ type: "remote" });
           return;
         }
         if (data === "?" || data === "h" || data === "H") {
-          done("help");
+          done({ type: "help" });
           return;
         }
         if (data === "m" || data === "M") {
-          done("menu");
+          done({ type: "menu" });
           return;
         }
         settingsList.handleInput?.(data);
@@ -350,25 +453,42 @@ async function showInteractiveOnce(
     };
   });
 
-  switch (result) {
-    case "cancel":
+  // Handle results
+  if (result.type === "cancel") {
+    if (staged.size > 0) {
       ctx.ui.notify("No changes applied.", "info");
-      return true; // Exit
-    case "installed":
-      await showInstalledPackages(ctx, pi);
-      return false; // Return to main menu
-    case "remote":
-      await showRemote("", ctx, pi);
-      return false; // Return to main menu
-    case "help":
-      showHelp(ctx);
-      return false; // Return to main menu
-    case "menu":
-      return false; // Return to main menu (already there)
+    }
+    return true;
   }
 
-  // Apply changes
-  const apply = await applyStagedChanges(entries, staged);
+  if (result.type === "remote") {
+    await showRemote("", ctx, pi);
+    return false;
+  }
+
+  if (result.type === "help") {
+    showHelp(ctx);
+    return false;
+  }
+
+  if (result.type === "menu") {
+    return false;
+  }
+
+  if (result.type === "action") {
+    const item = byId.get(result.itemId);
+    if (item?.type === "package") {
+      const exitManager = await handlePackageAction(item, ctx, pi);
+      return exitManager; // true = exit manager, false = return to unified view
+    }
+    return false;
+  }
+
+  // Apply changes for local extensions
+  const localItems = items.filter((i) => i.type === "local" && i.activePath) as Required<
+    Pick<UnifiedItem, "id" | "activePath" | "disabledPath" | "originalState">
+  >[];
+  const apply = await applyStagedChangesUnified(localItems, staged);
 
   if (apply.errors.length > 0) {
     ctx.ui.notify(
@@ -377,82 +497,164 @@ async function showInteractiveOnce(
     );
   } else if (apply.changed === 0) {
     ctx.ui.notify("No changes to apply.", "info");
-    return false; // Return to main menu
   } else {
     ctx.ui.notify(`Applied ${apply.changed} extension change(s).`, "info");
   }
 
-  // Prompt for reload
-  const shouldReload = await ctx.ui.confirm(
-    "Reload Required",
-    "Extensions changed. Reload pi now?"
-  );
+  // Prompt for reload if changes were made
+  if (apply.changed > 0) {
+    const shouldReload = await ctx.ui.confirm(
+      "Reload Required",
+      "Extensions changed. Reload pi now?"
+    );
 
-  if (shouldReload) {
-    ctx.ui.setEditorText("/reload");
-    return true; // Exit the UI so user can see the reload command
+    if (shouldReload) {
+      ctx.ui.setEditorText("/reload");
+      return true;
+    }
   }
 
-  return false; // Return to main menu
+  return false;
 }
 
-function formatEntryLabel(
-  entry: ExtensionEntry,
+function formatUnifiedItemLabel(
+  item: UnifiedItem,
   state: State,
   theme: Theme,
   changed = false
 ): string {
-  const statusIcon = state === "enabled" ? theme.fg("success", "●") : theme.fg("error", "○");
-  const scopeIcon = entry.scope === "global" ? theme.fg("muted", "G") : theme.fg("accent", "P");
-  const changeMarker = changed ? theme.fg("warning", " *") : "";
-  const name = theme.bold(entry.displayName);
-  const summary = theme.fg("dim", entry.summary);
-  return `${statusIcon} [${scopeIcon}] ${name} - ${summary}${changeMarker}`;
+  if (item.type === "local") {
+    const statusIcon = state === "enabled" ? theme.fg("success", "●") : theme.fg("error", "○");
+    const scopeIcon = item.scope === "global" ? theme.fg("muted", "G") : theme.fg("accent", "P");
+    const changeMarker = changed ? theme.fg("warning", " *") : "";
+    const name = theme.bold(item.displayName);
+    const summary = theme.fg("dim", item.summary);
+    return `${statusIcon} [${scopeIcon}] ${name} - ${summary}${changeMarker}`;
+  } else {
+    // Package
+    const pkgIcon = theme.fg("accent", "📦");
+    const scopeIcon = item.scope === "global" ? theme.fg("muted", "G") : theme.fg("accent", "P");
+    const name = theme.bold(item.displayName);
+    const version = item.version ? theme.fg("dim", `@${item.version}`) : "";
+    const source = theme.fg("dim", item.summary.split(" (")[0] ?? "");
+    return `${pkgIcon} [${scopeIcon}] ${name}${version} - ${source}`;
+  }
 }
 
-async function applyStagedChanges(entries: ExtensionEntry[], staged: Map<string, State>) {
+async function applyStagedChangesUnified(
+  items: Required<Pick<UnifiedItem, "id" | "activePath" | "disabledPath" | "originalState">>[],
+  staged: Map<string, State>
+) {
   let changed = 0;
   const errors: string[] = [];
 
-  for (const entry of entries) {
-    const target = staged.get(entry.id) ?? entry.state;
-    if (target === entry.state) continue;
+  for (const item of items) {
+    const target = staged.get(item.id) ?? item.originalState;
+    if (target === item.originalState) continue;
 
-    const result = await setState(entry, target);
+    const result = await setStateUnified(item, target);
     if (result.ok) {
-      entry.state = target;
       changed++;
     } else {
-      errors.push(`${entry.displayName}: ${(result as { error: string }).error}`);
+      errors.push(`${item.id}: ${result.error}`);
     }
   }
 
   return { changed, errors };
 }
 
+async function setStateUnified(
+  item: Pick<UnifiedItem, "activePath" | "disabledPath">,
+  target: State
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    if (!item.activePath || !item.disabledPath) {
+      return { ok: false, error: "Missing paths" };
+    }
+    if (target === "enabled") {
+      await rename(item.disabledPath, item.activePath);
+    } else {
+      await rename(item.activePath, item.disabledPath);
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function handlePackageAction(
+  item: UnifiedItem,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI
+): Promise<boolean> {
+  if (!ctx.hasUI || !item.source) return true;
+
+  const choice = await ctx.ui.select(`${item.displayName} Actions`, [
+    `Update package`,
+    `Remove package`,
+    `View details`,
+    `Back to manager`,
+  ]);
+
+  if (!choice || choice.includes("Back")) {
+    return false; // Stay in manager
+  }
+
+  if (choice.includes("Update")) {
+    await updatePackage(item.source, ctx, pi);
+  } else if (choice.includes("Remove")) {
+    await removePackage(item.source, ctx, pi);
+  } else if (choice.includes("details")) {
+    ctx.ui.notify(
+      `Name: ${item.displayName}\nVersion: ${item.version || "unknown"}\nSource: ${item.source}\nScope: ${item.scope}`,
+      "info"
+    );
+    // Show actions again
+    return handlePackageAction(item, ctx, pi);
+  }
+
+  return false; // Stay in manager
+}
+
+// Legacy function kept for backward compatibility - use unified view instead
+async function showInstalledPackagesLegacy(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
+  ctx.ui.notify(
+    "📦 Use /extensions for the unified view.\nInstalled packages are now shown alongside local extensions.",
+    "info"
+  );
+  // Small delay then open the main manager
+  await new Promise((r) => setTimeout(r, 1500));
+  await showInteractive(ctx, pi);
+}
+
 function showHelp(ctx: ExtensionCommandContext): void {
   const lines = [
     "Extensions Manager Help",
     "",
-    "Local Extensions:",
-    "  Extensions are loaded from:",
-    "  - ~/.pi/agent/extensions/ (global)",
-    "  - .pi/extensions/ (project-local)",
+    "Unified View:",
+    "  Local extensions and npm/git packages are displayed together",
+    "  Local extensions show ● enabled / ○ disabled with G/P scope",
+    "  Packages show 📦 with name@version and G/P scope",
     "",
     "Navigation:",
     "  ↑↓           Navigate list",
-    "  Space/Enter  Toggle enabled/disabled",
-    "  S            Save changes",
-    "  I            View installed packages",
+    "  Space/Enter  Toggle local extension enabled/disabled",
+    "  S            Save changes to local extensions",
+    "  A            Actions on selected package (update/remove)",
     "  R            Browse remote packages",
-    "  M            Main menu (exit to command line)",
     "  ?/H          Show this help",
     "  Esc          Cancel",
+    "",
+    "Extension Sources:",
+    "  - ~/.pi/agent/extensions/ (global - G)",
+    "  - .pi/extensions/ (project-local - P)",
+    "  - npm packages installed via pi install",
+    "  - git packages installed via pi install",
     "",
     "Commands:",
     "  /extensions              Open manager",
     "  /extensions list         List local extensions",
-    "  /extensions installed    List installed packages",
+    "  /extensions installed    List installed packages (legacy)",
     "  /extensions remote       Browse community packages",
     "  /extensions search <q>   Search for packages",
     "  /extensions install <s>  Install package (npm:, git:, or path)",
@@ -465,7 +667,6 @@ function showHelp(ctx: ExtensionCommandContext): void {
   } else {
     console.log(output);
   }
-  // Note: Removed auto-return to main menu (was causing memory leak potential)
 }
 
 // ============== Remote Package Management ==============
@@ -478,7 +679,8 @@ async function showRemote(args: string, ctx: ExtensionCommandContext, pi: Extens
   switch (sub) {
     case "list":
     case "installed":
-      await showInstalledPackages(ctx, pi);
+      // Legacy: redirect to unified view
+      await showInstalledPackagesLegacy(ctx, pi);
       return;
     case "install":
       if (query) {
@@ -501,7 +703,7 @@ async function showRemote(args: string, ctx: ExtensionCommandContext, pi: Extens
 }
 
 async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
-  type MenuAction = "browse" | "search" | "install" | "list" | "cancel" | "main" | "help";
+  type MenuAction = "browse" | "search" | "install" | "cancel" | "main" | "help";
 
   const result = await ctx.ui.custom<MenuAction>((tui, theme, _kb, done) => {
     const container = new Container();
@@ -509,6 +711,9 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
     // Header
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold("Community Packages")), 2, 1));
+    container.addChild(
+      new Text(theme.fg("muted", "Use /extensions for unified view of installed items"), 2, 0)
+    );
     container.addChild(new Spacer(1));
 
     const menuItems: SelectItem[] = [
@@ -519,7 +724,6 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
       },
       { value: "search", label: "🔎 Search packages", description: "Search npm with custom query" },
       { value: "install", label: "📥 Install by source", description: "npm:, git:, or local path" },
-      { value: "list", label: "📋 List installed", description: "View your installed packages" },
     ];
 
     const selectList = new SelectList(menuItems, menuItems.length + 2, {
@@ -575,9 +779,6 @@ async function showRemoteMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
       break;
     case "install":
       await promptInstall(ctx, pi);
-      break;
-    case "list":
-      await showInstalledPackages(ctx, pi);
       break;
     case "main":
       return;
@@ -1344,7 +1545,8 @@ async function removePackage(source: string, ctx: ExtensionCommandContext, pi: E
 
 // ============== Installed Packages ==============
 
-async function showInstalledPackages(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
+// Legacy list view for non-interactive mode and backward compatibility
+async function showInstalledPackagesList(ctx: ExtensionCommandContext, pi: ExtensionAPI) {
   const packages = await getInstalledPackages(ctx, pi);
 
   if (packages.length === 0) {
@@ -1420,7 +1622,8 @@ async function showPackageActions(
     );
     await showPackageActions(source, pkg, ctx, pi);
   } else if (choice.includes("Back")) {
-    await showInstalledPackages(ctx, pi);
+    // Return to unified view instead of old list
+    await showInstalledPackagesLegacy(ctx, pi);
   }
 }
 
@@ -1801,22 +2004,6 @@ async function parseDirectoryIndex(
   }
 
   return undefined;
-}
-
-async function setState(
-  entry: ExtensionEntry,
-  target: State
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    if (target === "enabled") {
-      await rename(entry.disabledPath, entry.activePath);
-    } else {
-      await rename(entry.activePath, entry.disabledPath);
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 async function readSummary(filePath: string): Promise<string> {
