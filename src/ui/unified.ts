@@ -21,7 +21,7 @@ import { showPackageActions } from "../packages/management.js";
 import { showRemote } from "./remote.js";
 import { showHelp } from "./help.js";
 import { discoverExtensions as discoverExt } from "../extensions/discovery.js";
-import { formatEntry as formatExtEntry, truncate } from "../utils/format.js";
+import { formatEntry as formatExtEntry, dynamicTruncate } from "../utils/format.js";
 import {
   getStatusIcon,
   getPackageIcon,
@@ -291,8 +291,9 @@ function formatUnifiedItemLabel(
     const infoParts: string[] = [];
 
     // Show description if available
+    // Reserved space: icon (2) + scope (3) + name (~25) + version (~10) + separator (3) = ~43 chars
     if (item.description) {
-      infoParts.push(truncate(item.description, 40));
+      infoParts.push(dynamicTruncate(item.description, 43));
     } else if (item.source?.startsWith("npm:")) {
       infoParts.push("npm");
     } else if (item.source?.startsWith("git:")) {

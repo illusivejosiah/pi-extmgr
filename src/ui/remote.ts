@@ -4,7 +4,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { BrowseAction, NpmPackage } from "../types/index.js";
 import { PAGE_SIZE } from "../constants.js";
-import { truncate } from "../utils/format.js";
+import { truncate, dynamicTruncate } from "../utils/format.js";
 import {
   searchNpmPackages,
   getSearchCache,
@@ -119,9 +119,11 @@ export async function browseRemotePackages(
       : `Search: ${truncate(query, 40)}`;
 
   // Use simple select instead of custom component to avoid hanging issues
+  // Calculate reserved space: name (~25) + version (~10) + separator (3) = ~40 chars
+  const reservedSpace = 40;
   const selectItems: string[] = packages.map(
     (p) =>
-      `${p.name}${p.version ? ` @${p.version}` : ""} - ${truncate(p.description || "No description", 50)}`
+      `${p.name}${p.version ? ` @${p.version}` : ""} - ${dynamicTruncate(p.description || "No description", reservedSpace)}`
   );
 
   // Add navigation options
