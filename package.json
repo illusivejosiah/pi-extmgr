@@ -28,7 +28,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://i.imgur.com/TjAp7Hv.png"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
