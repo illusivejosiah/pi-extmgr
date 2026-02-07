@@ -59,7 +59,6 @@ export default function extensionsManager(pi: ExtensionAPI) {
         : null;
     },
     handler: async (args, ctx) => {
-      // Check if we have UI support
       if (!ctx.hasUI) {
         await handleNonInteractive(args, ctx, pi);
         return;
@@ -69,62 +68,42 @@ export default function extensionsManager(pi: ExtensionAPI) {
       const [subcommand, ...rest] = input.split(/\s+/).filter(Boolean);
       const sub = (subcommand ?? "").toLowerCase();
 
-      switch (sub) {
-        case "":
-        case "local":
-          await showInteractive(ctx, pi);
-          break;
-        case "list":
-          await showListOnly(ctx);
-          break;
-        case "remote":
-        case "packages":
-          await showRemote(rest.join(" "), ctx, pi);
-          break;
-        case "installed":
-          await showInstalledPackagesLegacy(ctx, pi);
-          break;
-        case "search":
-          await showRemote(`search ${rest.join(" ")}`, ctx, pi);
-          break;
-        case "install":
-          if (rest.length > 0) {
-            await installPackage(rest.join(" "), ctx, pi);
-          } else {
-            await showRemote("install", ctx, pi);
-          }
-          break;
-        case "remove":
-        case "uninstall":
-          if (rest.length > 0) {
-            await removePackage(rest.join(" "), ctx, pi);
-          } else {
-            await promptRemove(ctx, pi);
-          }
-          break;
-        case "auto-update":
-          handleAutoUpdateCommand(rest.join(" "), ctx);
-          break;
-        case "history":
-          showHistory(ctx, pi);
-          break;
-        case "stats":
-          await showStats(ctx, pi);
-          break;
-        case "clear-cache":
-          await clearMetadataCache(ctx, pi);
-          break;
-        default:
-          // If it looks like a package source, try to install it
-          if (subcommand && isPackageSource(subcommand)) {
-            await installPackage(input, ctx, pi);
-          } else {
-            notify(
-              ctx,
-              `Unknown command: ${subcommand ?? "(empty)"}. Try: local, remote, installed, search, install, remove`,
-              "warning"
-            );
-          }
+      const interactiveHandlers: Record<string, () => Promise<void> | void> = {
+        "": () => showInteractive(ctx, pi),
+        local: () => showInteractive(ctx, pi),
+        list: () => showListOnly(ctx),
+        remote: () => showRemote(rest.join(" "), ctx, pi),
+        packages: () => showRemote(rest.join(" "), ctx, pi),
+        installed: () => showInstalledPackagesLegacy(ctx, pi),
+        search: () => showRemote(`search ${rest.join(" ")}`, ctx, pi),
+        install: () =>
+          rest.length > 0
+            ? installPackage(rest.join(" "), ctx, pi)
+            : showRemote("install", ctx, pi),
+        remove: () =>
+          rest.length > 0 ? removePackage(rest.join(" "), ctx, pi) : promptRemove(ctx, pi),
+        uninstall: () =>
+          rest.length > 0 ? removePackage(rest.join(" "), ctx, pi) : promptRemove(ctx, pi),
+        "auto-update": () => handleAutoUpdateCommand(rest.join(" "), ctx),
+        history: () => showHistory(ctx, pi),
+        stats: () => showStats(ctx, pi),
+        "clear-cache": () => clearMetadataCache(ctx, pi),
+      };
+
+      const handler = interactiveHandlers[sub];
+      if (handler) {
+        await handler();
+        return;
+      }
+
+      if (subcommand && isPackageSource(subcommand)) {
+        await installPackage(input, ctx, pi);
+      } else {
+        notify(
+          ctx,
+          `Unknown command: ${subcommand ?? "(empty)"}. Try: local, remote, installed, search, install, remove`,
+          "warning"
+        );
       }
     },
   });
@@ -238,62 +217,61 @@ async function handleNonInteractive(
   const [subcommand, ...rest] = input.split(/\s+/).filter(Boolean);
   const sub = (subcommand ?? "").toLowerCase();
 
-  switch (sub) {
-    case "list":
-      await showListOnly(ctx);
-      break;
-    case "installed":
-      await showInstalledPackagesList(ctx, pi);
-      break;
-    case "remote":
-    case "packages":
-      console.log("Extensions Manager (non-interactive mode)");
-      console.log("Remote package browsing requires interactive mode.");
-      console.log("");
-      console.log("Available commands:");
-      console.log("  /extensions list      - List local extensions");
-      console.log("  /extensions installed - List installed packages");
-      console.log("  /extensions install <source> - Install a package");
-      console.log("  /extensions remove <source>  - Remove a package");
-      break;
-    case "search":
-      console.log("Search requires interactive mode.");
-      break;
-    case "install":
-      if (rest.length > 0) {
-        await installPackage(rest.join(" "), ctx, pi);
-      } else {
-        console.log("Usage: /extensions install <npm:package|git:url|path>");
-      }
-      break;
-    case "remove":
-    case "uninstall":
-      if (rest.length > 0) {
-        await removePackage(rest.join(" "), ctx, pi);
-      } else {
-        console.log("Usage: /extensions remove <npm:package|git:url|path>");
-      }
-      break;
-    case "auto-update":
+  const showNonInteractiveHelp = () => {
+    console.log("Extensions Manager (non-interactive mode)");
+    console.log("Remote package browsing requires interactive mode.");
+    console.log("");
+    console.log("Available commands:");
+    console.log("  /extensions list      - List local extensions");
+    console.log("  /extensions installed - List installed packages");
+    console.log("  /extensions install <source> - Install a package");
+    console.log("  /extensions remove <source>  - Remove a package");
+  };
+
+  const nonInteractiveHandlers: Record<string, () => Promise<void> | void> = {
+    list: () => showListOnly(ctx),
+    installed: () => showInstalledPackagesList(ctx, pi),
+    remote: () => showNonInteractiveHelp(),
+    packages: () => showNonInteractiveHelp(),
+    search: () => console.log("Search requires interactive mode."),
+    install: () =>
+      rest.length > 0
+        ? installPackage(rest.join(" "), ctx, pi)
+        : console.log("Usage: /extensions install <npm:package|git:url|path>"),
+    remove: () =>
+      rest.length > 0
+        ? removePackage(rest.join(" "), ctx, pi)
+        : console.log("Usage: /extensions remove <npm:package|git:url|path>"),
+    uninstall: () =>
+      rest.length > 0
+        ? removePackage(rest.join(" "), ctx, pi)
+        : console.log("Usage: /extensions remove <npm:package|git:url|path>"),
+    "auto-update": () => {
       console.log("Auto-update requires interactive mode.");
       console.log("Usage: /extensions auto-update <duration>");
       console.log("");
       console.log("Duration examples: 1h, 2h, 1d, 3d, 1w, 2w, 1m, never");
-      break;
-    default:
-      // If it looks like a package source, try to install it
-      if (subcommand && isPackageSource(subcommand)) {
-        await installPackage(input, ctx, pi);
-      } else {
-        console.log("Extensions Manager (non-interactive mode)");
-        console.log("");
-        console.log("Commands:");
-        console.log("  /extensions list      - List local extensions");
-        console.log("  /extensions installed - List installed packages");
-        console.log("");
-        console.log("For full functionality, run in interactive mode.");
-      }
+    },
+  };
+
+  const handler = nonInteractiveHandlers[sub];
+  if (handler) {
+    await handler();
+    return;
   }
+
+  if (subcommand && isPackageSource(subcommand)) {
+    await installPackage(input, ctx, pi);
+    return;
+  }
+
+  console.log("Extensions Manager (non-interactive mode)");
+  console.log("");
+  console.log("Commands:");
+  console.log("  /extensions list      - List local extensions");
+  console.log("  /extensions installed - List installed packages");
+  console.log("");
+  console.log("For full functionality, run in interactive mode.");
 }
 
 export { showHelp };

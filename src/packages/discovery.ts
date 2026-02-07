@@ -102,6 +102,15 @@ export async function getInstalledPackages(
     return [];
   }
 
+  const packages = parseInstalledPackagesOutput(text);
+
+  // Fetch metadata (descriptions and sizes) for packages in parallel
+  await addPackageMetadata(packages, ctx, pi);
+
+  return packages;
+}
+
+export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
   const packages: InstalledPackage[] = [];
   const seenSources = new Set<string>();
   const seenNames = new Set<string>();
@@ -111,12 +120,10 @@ export async function getInstalledPackages(
 
   for (const line of lines) {
     // Skip empty lines and indented continuation lines (resolved paths)
-    // Package lines start with "  " (2 spaces), resolved paths start with "    " (4 spaces)
     if (!line.trim() || line.startsWith("    ")) continue;
 
     const trimmed = line.trim();
 
-    // Detect scope headers - must be standalone headers, not paths containing these words
     const lowerTrimmed = trimmed.toLowerCase();
     if (
       lowerTrimmed === "global" ||
@@ -138,77 +145,61 @@ export async function getInstalledPackages(
       continue;
     }
 
-    // Parse package lines
     const match = trimmed.match(/^[-•]?\s*(npm:|git:|https?:|\/|\.\/|\.\.\/)(.+)$/);
-    if (match?.[1] && match[2]) {
-      const fullSource = match[1] + match[2];
+    if (!match?.[1] || !match[2]) continue;
 
-      // Deduplicate by source
-      if (seenSources.has(fullSource)) continue;
-      seenSources.add(fullSource);
+    const fullSource = match[1] + match[2];
+    if (seenSources.has(fullSource)) continue;
+    seenSources.add(fullSource);
 
-      // Extract name and version
-      let name = fullSource;
-      let version: string | undefined;
-      let source = fullSource;
+    const { name, version } = parsePackageNameAndVersion(fullSource);
 
-      if (fullSource.startsWith("npm:")) {
-        const npmPart = fullSource.slice(4);
-        // Scoped packages: @scope/name@version
-        const scopedMatch = npmPart.match(/^(@[^@]+\/[^@]+)@(.+)$/);
-        if (scopedMatch?.[1] && scopedMatch[2]) {
-          name = scopedMatch[1];
-          version = scopedMatch[2];
-        } else {
-          // Regular packages: name@version
-          const simpleMatch = npmPart.match(/^([^@]+)@(.+)$/);
-          if (simpleMatch?.[1] && simpleMatch[2]) {
-            name = simpleMatch[1];
-            version = simpleMatch[2];
-          } else {
-            name = npmPart;
-          }
-        }
-      } else if (fullSource.startsWith("git:")) {
-        name = fullSource.slice(4).split("@")[0] || fullSource;
-      } else if (fullSource.includes("node_modules/")) {
-        // Handle full paths like /home/user/.fnm/.../node_modules/package-name
-        const nmMatch = fullSource.match(/node_modules\/(.+)$/);
-        if (nmMatch?.[1]) {
-          // Handle scoped packages: node_modules/@scope/name
-          const pkgPart = nmMatch[1];
-          if (pkgPart.startsWith("@")) {
-            // @scope/name format
-            name = pkgPart;
-          } else {
-            name = pkgPart;
-          }
-        }
-      } else {
-        // For local file paths, extract just the filename
-        const pathParts = fullSource.split("/");
-        const fileName = pathParts[pathParts.length - 1];
-        if (fileName) {
-          name = fileName;
-        }
-      }
+    if (seenNames.has(name)) continue;
+    seenNames.add(name);
 
-      // Deduplicate by package name (handles same pkg in both npm: and node_modules/ path formats)
-      if (seenNames.has(name)) continue;
-      seenNames.add(name);
+    const pkg: InstalledPackage = { source: fullSource, name, scope: currentScope };
+    if (version !== undefined) {
+      pkg.version = version;
+    }
+    packages.push(pkg);
+  }
 
-      const pkg: InstalledPackage = { source, name, scope: currentScope };
-      if (version !== undefined) {
-        pkg.version = version;
-      }
-      packages.push(pkg);
+  return packages;
+}
+
+function parsePackageNameAndVersion(fullSource: string): {
+  name: string;
+  version?: string | undefined;
+} {
+  if (fullSource.startsWith("npm:")) {
+    const npmPart = fullSource.slice(4);
+    const scopedMatch = npmPart.match(/^(@[^@]+\/[^@]+)@(.+)$/);
+    if (scopedMatch?.[1] && scopedMatch[2]) {
+      return { name: scopedMatch[1], version: scopedMatch[2] };
+    }
+
+    const simpleMatch = npmPart.match(/^([^@]+)@(.+)$/);
+    if (simpleMatch?.[1] && simpleMatch[2]) {
+      return { name: simpleMatch[1], version: simpleMatch[2] };
+    }
+
+    return { name: npmPart };
+  }
+
+  if (fullSource.startsWith("git:")) {
+    return { name: fullSource.slice(4).split("@")[0] || fullSource };
+  }
+
+  if (fullSource.includes("node_modules/")) {
+    const nmMatch = fullSource.match(/node_modules\/(.+)$/);
+    if (nmMatch?.[1]) {
+      return { name: nmMatch[1] };
     }
   }
 
-  // Fetch metadata (descriptions and sizes) for packages in parallel
-  await addPackageMetadata(packages, ctx, pi);
-
-  return packages;
+  const pathParts = fullSource.split("/");
+  const fileName = pathParts[pathParts.length - 1];
+  return { name: fileName || fullSource };
 }
 
 /**

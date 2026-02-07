@@ -25,7 +25,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke-test": "node --import=tsx ./scripts/smoke-test.mjs",
-    "check": "pnpm run typecheck && pnpm run smoke-test && pnpm run lint && pnpm run format:check",
+    "test": "node --import=tsx --test ./test/*.test.ts",
+    "check": "pnpm run typecheck && pnpm run smoke-test && pnpm run test && pnpm run lint && pnpm run format:check",
     "prepublishOnly": "pnpm run check",
     "prepare": "husky"
   },
