@@ -1,4 +1,4 @@
-import("./../index.ts")
+import("./../src/index.ts")
   .then(() => {
     console.log("✓ Extension loads");
   })

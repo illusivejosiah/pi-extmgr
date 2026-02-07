@@ -40,6 +40,10 @@ export default [
           selector: "ImportNamespaceSpecifier",
           message: "Use named imports instead of 'import *'",
         },
+        {
+          selector: "ImportExpression",
+          message: "Avoid dynamic imports. Use top-level imports instead.",
+        },
       ],
     },
   },

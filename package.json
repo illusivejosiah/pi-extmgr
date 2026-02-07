@@ -9,9 +9,9 @@
     "pi-extension-manager"
   ],
   "type": "module",
-  "main": "./index.ts",
+  "main": "./src/index.ts",
   "files": [
-    "index.ts",
+    "src/",
     "README.md"
   ],
   "scripts": {
@@ -27,7 +27,7 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/index.ts"
     ],
     "video": "https://github.com/ayagmar/pi-extmgr/releases/download/v0.0.2/Screencast_20260207_013142.mp4",
     "image": "https://i.imgur.com/nP5rJPC.png"
