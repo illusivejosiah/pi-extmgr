@@ -27,16 +27,17 @@
 All your extensions in one place:
 
 - **Local extensions**: `● enabled` / `○ disabled` with `[G]` global or `[P]` project scope
-- **Installed packages**: `📦` icon with name@version
+- **Installed packages**: `◆` npm / `◇` git icon with name@version and size info
 - **Visual distinction** between toggle-able locals and action-based packages
 - **Smart deduplication** - packages already managed as local extensions are hidden
+- **Theme adaptive UI** - Works consistently in dark and light themes
 
 ### 🔍 Smart Package Discovery
 
 - **Browse community packages** with pagination (20 per page)
-- **Cached search results** for lightning-fast navigation
+- **Cached search results** - npm metadata cached for 24 hours for fast navigation
 - **Keyword filtering** - automatically shows `pi-package` tagged npm packages
-- **Detailed package info** - view version, author, homepage
+- **Detailed package info** - view version, author, homepage, and install size
 
 ### 📦 Flexible Installation
 
@@ -56,6 +57,15 @@ All your extensions in one place:
 - **Bulk operations** - update all packages at once
 - **Scope indicators**: Global (G) vs Project (P) for all items
 
+### 📊 Extension Change History
+
+Track all your extension management actions:
+
+- **Automatic logging** - Every toggle, install, update, and remove is recorded
+- **Session persistence** - View change history with `/extensions history`
+- **Statistics** - View totals by action type with `/extensions stats`
+- **Error tracking** - Failed operations are logged with error details
+
 ### 🎯 Quality of Life
 
 - **Tab autocomplete** for all subcommands
@@ -63,6 +73,7 @@ All your extensions in one place:
 - **Keyboard shortcut**: `Ctrl+Shift+E` opens extension manager
 - **Non-interactive mode** - works in scripts and CI
 - **Parallel data loading** - local extensions and packages fetched simultaneously
+- **Metadata caching** - npm package info cached for 24 hours for faster browsing
 
 ## 🚀 Installation
 
@@ -145,6 +156,11 @@ Browse and install from npm:
 /extensions install <source>  # Install from npm/git/path
 /extensions remove [source]   # Remove package (interactive if no source)
 /extensions uninstall [source]# Alias for remove
+
+# History & Stats
+/extensions history           # View recent extension changes
+/extensions stats             # View extension manager statistics
+/extensions clear-cache       # Clear metadata cache
 ```
 
 ### Install Sources
@@ -316,6 +332,32 @@ The extension remains installed but won't load until re-enabled.
 3. Press `A` for actions
 4. Select "Update package"
 5. Or use command: `/extensions install npm:pi-extmgr` then select "[Update all packages]"
+
+### Viewing Change History
+
+See what you've done in the current session:
+
+```
+/extensions history
+```
+
+Output shows recent actions like:
+
+```
+[12:34:56] ✓ global:my-extension: enabled → disabled
+[12:35:10] ✓ Installed pi-some-package@1.2.3
+[12:36:22] ✓ Updated pi-other-package → @2.0.0
+```
+
+### Viewing Statistics
+
+Get a summary of your extension management activity:
+
+```
+/extensions stats
+```
+
+Shows installed package count, total changes, and breakdown by action type.
 
 ## 🐛 Troubleshooting
 
