@@ -16,7 +16,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'master') &&
-      github.event.workflow_run.actor.login != 'github-actions[bot]'
+      github.event.workflow_run.actor.login != 'github-actions[bot]' &&
+      contains(github.event.workflow_run.head_commit.message, 'release')
     runs-on: ubuntu-latest
     environment: release
     steps:
