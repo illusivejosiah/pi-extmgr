@@ -277,6 +277,8 @@ function buildUnifiedItems(
   const items: UnifiedItem[] = [];
   const localPaths = new Set<string>();
 
+  const packageSourcesWithExtensions = new Set<string>();
+
   // Add local extensions
   for (const entry of localEntries) {
     localPaths.add(entry.activePath?.toLowerCase() ?? "");
@@ -293,8 +295,8 @@ function buildUnifiedItems(
     });
   }
 
-  // Add package extension entrypoints (toggleable)
   for (const entry of packageExtensions) {
+    packageSourcesWithExtensions.add(entry.packageSource.toLowerCase());
     items.push({
       type: "package-extension",
       id: entry.id,
@@ -308,10 +310,32 @@ function buildUnifiedItems(
     });
   }
 
-  // Add installed packages (filter out duplicates that exist as local extensions)
   for (const pkg of installedPackages) {
-    const pkgPath = pkg.source.toLowerCase();
-    if (localPaths.has(pkgPath)) continue;
+    const pkgSourceLower = pkg.source.toLowerCase();
+    const pkgResolvedLower = pkg.resolvedPath?.toLowerCase() ?? "";
+
+    if (packageSourcesWithExtensions.has(pkgSourceLower)) continue;
+
+    let isDuplicate = false;
+    for (const localPath of localPaths) {
+      if (pkgSourceLower === localPath || pkgResolvedLower === localPath) {
+        isDuplicate = true;
+        break;
+      }
+      if (
+        pkgResolvedLower &&
+        (localPath.startsWith(pkgResolvedLower + "/") || pkgResolvedLower.startsWith(localPath))
+      ) {
+        isDuplicate = true;
+        break;
+      }
+      const localDir = localPath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+      if (pkgResolvedLower && pkgResolvedLower.replace(/\\/g, "/") === localDir) {
+        isDuplicate = true;
+        break;
+      }
+    }
+    if (isDuplicate) continue;
 
     items.push({
       type: "package",
