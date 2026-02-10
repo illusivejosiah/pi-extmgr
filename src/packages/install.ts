@@ -17,389 +17,390 @@ import { TIMEOUTS } from "../constants.js";
 export type InstallScope = "global" | "project";
 
 export interface InstallOptions {
-	scope?: InstallScope;
+  scope?: InstallScope;
 }
 
 async function resolveInstallScope(
-	ctx: ExtensionCommandContext,
-	explicitScope?: InstallScope
+  ctx: ExtensionCommandContext,
+  explicitScope?: InstallScope
 ): Promise<InstallScope | undefined> {
-	if (explicitScope) return explicitScope;
+  if (explicitScope) return explicitScope;
 
-	if (!ctx.hasUI) return "global";
+  if (!ctx.hasUI) return "global";
 
-	const choice = await ctx.ui.select("Install scope", [
-		"Global (~/.pi/agent/settings.json)",
-		"Project (.pi/settings.json)",
-		"Cancel",
-	]);
+  const choice = await ctx.ui.select("Install scope", [
+    "Global (~/.pi/agent/settings.json)",
+    "Project (.pi/settings.json)",
+    "Cancel",
+  ]);
 
-	if (!choice || choice === "Cancel") return undefined;
-	return choice.startsWith("Project") ? "project" : "global";
+  if (!choice || choice === "Cancel") return undefined;
+  return choice.startsWith("Project") ? "project" : "global";
 }
 
 function getExtensionInstallDir(ctx: ExtensionCommandContext, scope: InstallScope): string {
-	if (scope === "project") {
-		return join(ctx.cwd, ".pi", "extensions");
-	}
-	return join(homedir(), ".pi", "agent", "extensions");
+  if (scope === "project") {
+    return join(ctx.cwd, ".pi", "extensions");
+  }
+  return join(homedir(), ".pi", "agent", "extensions");
 }
 
 /**
  * Safely extracts regex match groups with validation
  */
 function safeExtractGithubMatch(
-	match: RegExpMatchArray | null
+  match: RegExpMatchArray | null
 ): { owner: string; repo: string; branch: string; filePath: string } | undefined {
-	if (!match) return undefined;
+  if (!match) return undefined;
 
-	const owner = match[1];
-	const repo = match[2];
-	const branch = match[3];
-	const filePath = match[4];
+  const owner = match[1];
+  const repo = match[2];
+  const branch = match[3];
+  const filePath = match[4];
 
-	if (!owner || !repo || !branch || !filePath) {
-		return undefined;
-	}
+  if (!owner || !repo || !branch || !filePath) {
+    return undefined;
+  }
 
-	return { owner, repo, branch, filePath };
+  return { owner, repo, branch, filePath };
 }
 
 export async function installPackage(
-	source: string,
-	ctx: ExtensionCommandContext,
-	pi: ExtensionAPI,
-	options?: InstallOptions
+  source: string,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  options?: InstallOptions
 ): Promise<void> {
-	const scope = await resolveInstallScope(ctx, options?.scope);
-	if (!scope) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  const scope = await resolveInstallScope(ctx, options?.scope);
+  if (!scope) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	// Check if it's a GitHub URL to a .ts file - handle as direct download
-	const githubTsMatch = source.match(
-		/^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+\.ts)$/
-	);
-	const githubInfo = safeExtractGithubMatch(githubTsMatch);
-	if (githubInfo) {
-		const rawUrl = `https://raw.githubusercontent.com/${githubInfo.owner}/${githubInfo.repo}/${githubInfo.branch}/${githubInfo.filePath}`;
-		const fileName = githubInfo.filePath.split("/").pop() || `${githubInfo.owner}-${githubInfo.repo}.ts`;
-		await installFromUrl(rawUrl, fileName, ctx, pi, { scope });
-		return;
-	}
+  // Check if it's a GitHub URL to a .ts file - handle as direct download
+  const githubTsMatch = source.match(
+    /^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+\.ts)$/
+  );
+  const githubInfo = safeExtractGithubMatch(githubTsMatch);
+  if (githubInfo) {
+    const rawUrl = `https://raw.githubusercontent.com/${githubInfo.owner}/${githubInfo.repo}/${githubInfo.branch}/${githubInfo.filePath}`;
+    const fileName =
+      githubInfo.filePath.split("/").pop() || `${githubInfo.owner}-${githubInfo.repo}.ts`;
+    await installFromUrl(rawUrl, fileName, ctx, pi, { scope });
+    return;
+  }
 
-	// Check if it's already a raw URL to a .ts file
-	if (source.match(/^https:\/\/raw\.githubusercontent\.com\/.*\.ts$/)) {
-		const fileName = source.split("/").pop() || "extension.ts";
-		await installFromUrl(source, fileName, ctx, pi, { scope });
-		return;
-	}
+  // Check if it's already a raw URL to a .ts file
+  if (source.match(/^https:\/\/raw\.githubusercontent\.com\/.*\.ts$/)) {
+    const fileName = source.split("/").pop() || "extension.ts";
+    await installFromUrl(source, fileName, ctx, pi, { scope });
+    return;
+  }
 
-	const normalized = normalizePackageSource(source);
+  const normalized = normalizePackageSource(source);
 
-	// Confirm installation
-	const confirmed = await confirmAction(
-		ctx,
-		"Install Package",
-		`Install ${normalized} (${scope})?`
-	);
-	if (!confirmed) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  // Confirm installation
+  const confirmed = await confirmAction(
+    ctx,
+    "Install Package",
+    `Install ${normalized} (${scope})?`
+  );
+  if (!confirmed) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	showProgress(ctx, "Installing", normalized);
+  showProgress(ctx, "Installing", normalized);
 
-	const args = ["install", ...(scope === "project" ? ["-l"] : []), normalized];
-	const res = await pi.exec("pi", args, { timeout: TIMEOUTS.packageInstall, cwd: ctx.cwd });
+  const args = ["install", ...(scope === "project" ? ["-l"] : []), normalized];
+  const res = await pi.exec("pi", args, { timeout: TIMEOUTS.packageInstall, cwd: ctx.cwd });
 
-	if (res.code !== 0) {
-		const errorMsg = `Install failed:\n${res.stderr || res.stdout || `exit ${res.code}`}`;
-		logPackageInstall(pi, normalized, normalized, undefined, scope, false, errorMsg);
-		notifyError(ctx, errorMsg);
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
+  if (res.code !== 0) {
+    const errorMsg = `Install failed:\n${res.stderr || res.stdout || `exit ${res.code}`}`;
+    logPackageInstall(pi, normalized, normalized, undefined, scope, false, errorMsg);
+    notifyError(ctx, errorMsg);
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
 
-	clearSearchCache();
-	logPackageInstall(pi, normalized, normalized, undefined, scope, true);
-	success(ctx, `Installed ${normalized} (${scope})`);
+  clearSearchCache();
+  logPackageInstall(pi, normalized, normalized, undefined, scope, true);
+  success(ctx, `Installed ${normalized} (${scope})`);
 
-	void updateExtmgrStatus(ctx, pi);
-	await confirmReload(ctx, "Package installed.");
+  void updateExtmgrStatus(ctx, pi);
+  await confirmReload(ctx, "Package installed.");
 }
 
 export async function installFromUrl(
-	url: string,
-	fileName: string,
-	ctx: ExtensionCommandContext,
-	pi: ExtensionAPI,
-	options?: InstallOptions
+  url: string,
+  fileName: string,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  options?: InstallOptions
 ): Promise<void> {
-	const scope = await resolveInstallScope(ctx, options?.scope);
-	if (!scope) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  const scope = await resolveInstallScope(ctx, options?.scope);
+  if (!scope) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	const extensionDir = getExtensionInstallDir(ctx, scope);
+  const extensionDir = getExtensionInstallDir(ctx, scope);
 
-	// Confirm installation
-	const confirmed = await confirmAction(
-		ctx,
-		"Install from URL",
-		`Download ${fileName} to ${scope} extensions?`
-	);
-	if (!confirmed) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  // Confirm installation
+  const confirmed = await confirmAction(
+    ctx,
+    "Install from URL",
+    `Download ${fileName} to ${scope} extensions?`
+  );
+  if (!confirmed) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	const result = await tryOperation(
-		ctx,
-		async () => {
-			await mkdir(extensionDir, { recursive: true });
-			notify(ctx, `Downloading ${fileName}...`, "info");
+  const result = await tryOperation(
+    ctx,
+    async () => {
+      await mkdir(extensionDir, { recursive: true });
+      notify(ctx, `Downloading ${fileName}...`, "info");
 
-			const response = await fetch(url);
-			if (!response.ok) {
-				throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-			}
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+      }
 
-			const content = await response.text();
-			const destPath = join(extensionDir, fileName);
-			await writeFile(destPath, content, "utf8");
+      const content = await response.text();
+      const destPath = join(extensionDir, fileName);
+      await writeFile(destPath, content, "utf8");
 
-			return { fileName, destPath };
-		},
-		"Installation failed"
-	);
+      return { fileName, destPath };
+    },
+    "Installation failed"
+  );
 
-	if (!result) {
-		logPackageInstall(pi, url, fileName, undefined, scope, false, "Installation failed");
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
+  if (!result) {
+    logPackageInstall(pi, url, fileName, undefined, scope, false, "Installation failed");
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
 
-	const { fileName: name, destPath } = result;
-	logPackageInstall(pi, url, name, undefined, scope, true);
-	success(ctx, `Installed ${name} to:\n${destPath}`);
-	void updateExtmgrStatus(ctx, pi);
-	await confirmReload(ctx, "Extension installed.");
+  const { fileName: name, destPath } = result;
+  logPackageInstall(pi, url, name, undefined, scope, true);
+  success(ctx, `Installed ${name} to:\n${destPath}`);
+  void updateExtmgrStatus(ctx, pi);
+  await confirmReload(ctx, "Extension installed.");
 }
 
 /**
  * Safely parses package tarball information from npm view output
  */
 function parsePackageInfo(viewOutput: string): { version: string; tarballUrl: string } | undefined {
-	try {
-		const pkgInfo = JSON.parse(viewOutput) as {
-			version?: string;
-			dist?: { tarball?: string };
-		};
-		const version = pkgInfo.version;
-		const tarballUrl = pkgInfo.dist?.tarball;
+  try {
+    const pkgInfo = JSON.parse(viewOutput) as {
+      version?: string;
+      dist?: { tarball?: string };
+    };
+    const version = pkgInfo.version;
+    const tarballUrl = pkgInfo.dist?.tarball;
 
-		if (!version || !tarballUrl) {
-			return undefined;
-		}
+    if (!version || !tarballUrl) {
+      return undefined;
+    }
 
-		return { version, tarballUrl };
-	} catch {
-		return undefined;
-	}
+    return { version, tarballUrl };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function installPackageLocally(
-	packageName: string,
-	ctx: ExtensionCommandContext,
-	pi: ExtensionAPI,
-	options?: InstallOptions
+  packageName: string,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  options?: InstallOptions
 ): Promise<void> {
-	const scope = await resolveInstallScope(ctx, options?.scope);
-	if (!scope) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  const scope = await resolveInstallScope(ctx, options?.scope);
+  if (!scope) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	const extensionDir = getExtensionInstallDir(ctx, scope);
+  const extensionDir = getExtensionInstallDir(ctx, scope);
 
-	// Confirm local installation
-	const confirmed = await confirmAction(
-		ctx,
-		"Install Locally",
-		`Download ${packageName} to ${scope} extensions?\n\nThis installs as a standalone extension (manual updates).`
-	);
-	if (!confirmed) {
-		notify(ctx, "Installation cancelled.", "info");
-		return;
-	}
+  // Confirm local installation
+  const confirmed = await confirmAction(
+    ctx,
+    "Install Locally",
+    `Download ${packageName} to ${scope} extensions?\n\nThis installs as a standalone extension (manual updates).`
+  );
+  if (!confirmed) {
+    notify(ctx, "Installation cancelled.", "info");
+    return;
+  }
 
-	const result = await tryOperation(
-		ctx,
-		async () => {
-			await mkdir(extensionDir, { recursive: true });
-			showProgress(ctx, "Fetching", packageName);
+  const result = await tryOperation(
+    ctx,
+    async () => {
+      await mkdir(extensionDir, { recursive: true });
+      showProgress(ctx, "Fetching", packageName);
 
-			const viewRes = await pi.exec("npm", ["view", packageName, "--json"], {
-				timeout: TIMEOUTS.fetchPackageInfo,
-				cwd: ctx.cwd,
-			});
+      const viewRes = await pi.exec("npm", ["view", packageName, "--json"], {
+        timeout: TIMEOUTS.fetchPackageInfo,
+        cwd: ctx.cwd,
+      });
 
-			if (viewRes.code !== 0) {
-				throw new Error(`Failed to fetch package info: ${viewRes.stderr || viewRes.stdout}`);
-			}
+      if (viewRes.code !== 0) {
+        throw new Error(`Failed to fetch package info: ${viewRes.stderr || viewRes.stdout}`);
+      }
 
-			const pkgInfo = parsePackageInfo(viewRes.stdout);
-			if (!pkgInfo) {
-				throw new Error("No tarball URL found for package");
-			}
+      const pkgInfo = parsePackageInfo(viewRes.stdout);
+      if (!pkgInfo) {
+        throw new Error("No tarball URL found for package");
+      }
 
-			return pkgInfo;
-		},
-		"Failed to fetch package info"
-	);
+      return pkgInfo;
+    },
+    "Failed to fetch package info"
+  );
 
-	if (!result) {
-		logPackageInstall(
-			pi,
-			`npm:${packageName}`,
-			packageName,
-			undefined,
-			scope,
-			false,
-			"Failed to fetch package info"
-		);
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
-	const { version, tarballUrl } = result;
+  if (!result) {
+    logPackageInstall(
+      pi,
+      `npm:${packageName}`,
+      packageName,
+      undefined,
+      scope,
+      false,
+      "Failed to fetch package info"
+    );
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
+  const { version, tarballUrl } = result;
 
-	// Download and extract
-	const extractResult = await tryOperation(
-		ctx,
-		async () => {
-			const tempDir = join(extensionDir, ".temp");
-			await mkdir(tempDir, { recursive: true });
-			const tarballPath = join(tempDir, `${packageName.replace(/[@/]/g, "-")}-${version}.tgz`);
+  // Download and extract
+  const extractResult = await tryOperation(
+    ctx,
+    async () => {
+      const tempDir = join(extensionDir, ".temp");
+      await mkdir(tempDir, { recursive: true });
+      const tarballPath = join(tempDir, `${packageName.replace(/[@/]/g, "-")}-${version}.tgz`);
 
-			showProgress(ctx, "Downloading", `${packageName}@${version}`);
+      showProgress(ctx, "Downloading", `${packageName}@${version}`);
 
-			const response = await fetch(tarballUrl);
-			if (!response.ok) {
-				throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-			}
+      const response = await fetch(tarballUrl);
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+      }
 
-			const buffer = await response.arrayBuffer();
-			await writeFile(tarballPath, new Uint8Array(buffer));
+      const buffer = await response.arrayBuffer();
+      await writeFile(tarballPath, new Uint8Array(buffer));
 
-			return { tarballPath, tempDir };
-		},
-		"Download failed"
-	);
+      return { tarballPath, tempDir };
+    },
+    "Download failed"
+  );
 
-	if (!extractResult) {
-		logPackageInstall(
-			pi,
-			`npm:${packageName}`,
-			packageName,
-			version,
-			scope,
-			false,
-			"Download failed"
-		);
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
-	const { tarballPath, tempDir } = extractResult;
+  if (!extractResult) {
+    logPackageInstall(
+      pi,
+      `npm:${packageName}`,
+      packageName,
+      version,
+      scope,
+      false,
+      "Download failed"
+    );
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
+  const { tarballPath, tempDir } = extractResult;
 
-	// Extract
-	const extractDir = join(
-		tempDir,
-		`extracted-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-	);
+  // Extract
+  const extractDir = join(
+    tempDir,
+    `extracted-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
 
-	const extractSuccess = await tryOperation(
-		ctx,
-		async () => {
-			await mkdir(extractDir, { recursive: true });
-			notify(ctx, `Extracting ${packageName}...`, "info");
+  const extractSuccess = await tryOperation(
+    ctx,
+    async () => {
+      await mkdir(extractDir, { recursive: true });
+      notify(ctx, `Extracting ${packageName}...`, "info");
 
-			const extractRes = await pi.exec(
-				"tar",
-				["-xzf", tarballPath, "-C", extractDir, "--strip-components=1"],
-				{ timeout: TIMEOUTS.extractPackage, cwd: ctx.cwd }
-			);
+      const extractRes = await pi.exec(
+        "tar",
+        ["-xzf", tarballPath, "-C", extractDir, "--strip-components=1"],
+        { timeout: TIMEOUTS.extractPackage, cwd: ctx.cwd }
+      );
 
-			await rm(tarballPath, { force: true });
+      await rm(tarballPath, { force: true });
 
-			if (extractRes.code !== 0) {
-				throw new Error(`Extraction failed: ${extractRes.stderr || extractRes.stdout}`);
-			}
+      if (extractRes.code !== 0) {
+        throw new Error(`Extraction failed: ${extractRes.stderr || extractRes.stdout}`);
+      }
 
-			// Verify index.ts exists
-			const indexPath = join(extractDir, "index.ts");
-			try {
-				await access(indexPath);
-			} catch {
-				throw new Error(`Package ${packageName} does not have an index.ts file`);
-			}
+      // Verify index.ts exists
+      const indexPath = join(extractDir, "index.ts");
+      try {
+        await access(indexPath);
+      } catch {
+        throw new Error(`Package ${packageName} does not have an index.ts file`);
+      }
 
-			return true;
-		},
-		"Extraction failed"
-	);
+      return true;
+    },
+    "Extraction failed"
+  );
 
-	if (!extractSuccess) {
-		await rm(extractDir, { recursive: true, force: true });
-		logPackageInstall(
-			pi,
-			`npm:${packageName}`,
-			packageName,
-			version,
-			scope,
-			false,
-			"Extraction failed"
-		);
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
+  if (!extractSuccess) {
+    await rm(extractDir, { recursive: true, force: true });
+    logPackageInstall(
+      pi,
+      `npm:${packageName}`,
+      packageName,
+      version,
+      scope,
+      false,
+      "Extraction failed"
+    );
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
 
-	// Copy to extensions dir
-	const destResult = await tryOperation(
-		ctx,
-		async () => {
-			const extDirName = packageName.replace(/[@/]/g, "-");
-			const destDir = join(extensionDir, extDirName);
+  // Copy to extensions dir
+  const destResult = await tryOperation(
+    ctx,
+    async () => {
+      const extDirName = packageName.replace(/[@/]/g, "-");
+      const destDir = join(extensionDir, extDirName);
 
-			await rm(destDir, { recursive: true, force: true });
+      await rm(destDir, { recursive: true, force: true });
 
-			await cp(extractDir, destDir, { recursive: true });
-			return destDir;
-		},
-		"Failed to copy extension"
-	);
+      await cp(extractDir, destDir, { recursive: true });
+      return destDir;
+    },
+    "Failed to copy extension"
+  );
 
-	await rm(extractDir, { recursive: true, force: true });
+  await rm(extractDir, { recursive: true, force: true });
 
-	if (!destResult) {
-		logPackageInstall(
-			pi,
-			`npm:${packageName}`,
-			packageName,
-			version,
-			scope,
-			false,
-			"Failed to copy extension"
-		);
-		void updateExtmgrStatus(ctx, pi);
-		return;
-	}
+  if (!destResult) {
+    logPackageInstall(
+      pi,
+      `npm:${packageName}`,
+      packageName,
+      version,
+      scope,
+      false,
+      "Failed to copy extension"
+    );
+    void updateExtmgrStatus(ctx, pi);
+    return;
+  }
 
-	clearSearchCache();
-	logPackageInstall(pi, `npm:${packageName}`, packageName, version, scope, true);
-	success(ctx, `Installed ${packageName}@${version} locally to:\n${destResult}/index.ts`);
-	void updateExtmgrStatus(ctx, pi);
-	await confirmReload(ctx, "Extension installed.");
+  clearSearchCache();
+  logPackageInstall(pi, `npm:${packageName}`, packageName, version, scope, true);
+  success(ctx, `Installed ${packageName}@${version} locally to:\n${destResult}/index.ts`);
+  void updateExtmgrStatus(ctx, pi);
+  await confirmReload(ctx, "Extension installed.");
 }

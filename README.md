@@ -32,7 +32,7 @@ Then reload Pi.
   - Supports direct GitHub `.ts` installs and local standalone install mode
 - **Auto-update**
   - Interactive wizard (`t` in manager, or `/extensions auto-update`)
-  - Persistent schedule stored across sessions
+  - Persistent schedule restored on startup and session switch
   - Background checks + status bar updates
 - **Operational visibility**
   - Session history (`/extensions history`)
@@ -134,7 +134,7 @@ Examples:
 - **Two install modes**:
   - **Managed** (npm): Auto-updates with `pi update`, stored in pi's package cache
   - **Local** (standalone): Copies to `~/.pi/agent/extensions/{package}/`, supports multi-file extensions
-- **Auto-update schedule is persistent**: `/extensions auto-update 1d` stays active across future Pi sessions.
+- **Auto-update schedule is persistent**: `/extensions auto-update 1d` stays active across future Pi sessions and is restored when switching sessions.
 - **Reload is built-in**: When extmgr asks to reload, it calls `ctx.reload()` directly.
 - **Remove requires restart**: After removing a package, you need to fully restart Pi (not just a reload) for it to be completely unloaded.
 
