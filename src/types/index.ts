@@ -29,12 +29,25 @@ export interface InstalledPackage {
   name: string;
   version?: string | undefined;
   scope: "global" | "project";
+  resolvedPath?: string | undefined;
   description?: string | undefined;
   size?: number | undefined; // Package size in bytes
 }
 
+export interface PackageExtensionEntry {
+  id: string;
+  packageSource: string;
+  packageName: string;
+  packageScope: Scope;
+  extensionPath: string;
+  absolutePath: string;
+  displayName: string;
+  summary: string;
+  state: State;
+}
+
 export interface UnifiedItem {
-  type: "local" | "package";
+  type: "local" | "package" | "package-extension";
   id: string;
   displayName: string;
   summary: string;
@@ -50,6 +63,9 @@ export interface UnifiedItem {
   description?: string | undefined;
   size?: number | undefined; // Package size in bytes
   updateAvailable?: boolean | undefined;
+  // Package extension fields
+  packageSource?: string | undefined;
+  extensionPath?: string | undefined;
 }
 
 export interface SearchCache {

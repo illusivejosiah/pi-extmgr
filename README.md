@@ -55,7 +55,7 @@ Open the manager:
 | Key           | Action                                           |
 | ------------- | ------------------------------------------------ |
 | `↑↓`          | Navigate                                         |
-| `Space/Enter` | Toggle local extension on/off                    |
+| `Space/Enter` | Toggle local/package extension on/off            |
 | `S`           | Save changes                                     |
 | `Enter` / `A` | Actions on selected package (update/remove/view) |
 | `u`           | Update selected package directly                 |

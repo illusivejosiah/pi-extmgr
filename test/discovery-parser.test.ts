@@ -1,22 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseInstalledPackagesOutput } from "../src/packages/discovery.js";
+import {
+  parseInstalledPackagesOutput,
+  parseInstalledPackagesOutputAllScopes,
+} from "../src/packages/discovery.js";
 import { parseNpmSource } from "../src/utils/format.js";
 
-void test("parseInstalledPackagesOutput parses scopes, names, and versions", () => {
+void test("parseInstalledPackagesOutput parses scopes, names, versions, and resolved path lines", () => {
   const input = `
-Global packages:
+User packages:
   npm:pi-extmgr@0.1.4
-  npm:@scope/pkg@2.3.4
 Project packages:
-  git:https://github.com/user/repo.git@main
+  git:https://github.com/user/repo.git@main (filtered)
+    resolved: /tmp/.pi/git/github.com/user/repo
   /home/user/.fnm/node_modules/local-pkg
-    resolved: /home/user/.fnm/node_modules/local-pkg
+    /tmp/.pi/npm/local-pkg
 `;
 
   const result = parseInstalledPackagesOutput(input);
 
-  assert.equal(result.length, 4);
+  assert.equal(result.length, 3);
 
   assert.deepEqual(result[0], {
     source: "npm:pi-extmgr@0.1.4",
@@ -26,36 +29,44 @@ Project packages:
   });
 
   assert.deepEqual(result[1], {
-    source: "npm:@scope/pkg@2.3.4",
-    name: "@scope/pkg",
-    version: "2.3.4",
-    scope: "global",
-  });
-
-  assert.deepEqual(result[2], {
     source: "git:https://github.com/user/repo.git@main",
     name: "repo",
     scope: "project",
+    resolvedPath: "/tmp/.pi/git/github.com/user/repo",
   });
 
-  assert.deepEqual(result[3], {
+  assert.deepEqual(result[2], {
     source: "/home/user/.fnm/node_modules/local-pkg",
     name: "local-pkg",
     scope: "project",
+    resolvedPath: "/tmp/.pi/npm/local-pkg",
   });
 });
 
-void test("parseInstalledPackagesOutput deduplicates by package name", () => {
+void test("parseInstalledPackagesOutput deduplicates by normalized source", () => {
   const input = `
 Global:
   npm:dup-pkg@1.0.0
-Project:
-  /some/path/node_modules/dup-pkg
+  npm:dup-pkg@1.0.0 (filtered)
 `;
 
   const result = parseInstalledPackagesOutput(input);
   assert.equal(result.length, 1);
-  assert.equal(result[0]?.name, "dup-pkg");
+  assert.equal(result[0]?.source, "npm:dup-pkg@1.0.0");
+});
+
+void test("parseInstalledPackagesOutputAllScopes keeps duplicates across scopes", () => {
+  const input = `
+Global:
+  npm:dup-pkg@1.0.0
+Project:
+  npm:dup-pkg@1.0.0
+`;
+
+  const result = parseInstalledPackagesOutputAllScopes(input);
+  assert.equal(result.length, 2);
+  assert.equal(result[0]?.scope, "global");
+  assert.equal(result[1]?.scope, "project");
 });
 
 void test("parseInstalledPackagesOutput parses ssh git sources", () => {

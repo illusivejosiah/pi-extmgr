@@ -108,72 +108,142 @@ export async function getInstalledPackages(
   return packages;
 }
 
+function sanitizeListSourceSuffix(source: string): string {
+  return source
+    .trim()
+    .replace(/\s+\((filtered|pinned)\)$/i, "")
+    .trim();
+}
+
+function normalizeSourceIdentity(source: string): string {
+  return sanitizeListSourceSuffix(source).replace(/\\/g, "/").toLowerCase();
+}
+
+function isScopeHeader(lowerTrimmed: string, scope: "global" | "project"): boolean {
+  if (scope === "global") {
+    return (
+      lowerTrimmed === "global" ||
+      lowerTrimmed === "user" ||
+      lowerTrimmed.startsWith("global packages") ||
+      lowerTrimmed.startsWith("global:") ||
+      lowerTrimmed.startsWith("user packages") ||
+      lowerTrimmed.startsWith("user:")
+    );
+  }
+
+  return (
+    lowerTrimmed === "project" ||
+    lowerTrimmed === "local" ||
+    lowerTrimmed.startsWith("project packages") ||
+    lowerTrimmed.startsWith("project:") ||
+    lowerTrimmed.startsWith("local packages") ||
+    lowerTrimmed.startsWith("local:")
+  );
+}
+
+function looksLikePackageSource(source: string): boolean {
+  return (
+    source.startsWith("npm:") ||
+    source.startsWith("git:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://") ||
+    source.startsWith("/") ||
+    source.startsWith("./") ||
+    source.startsWith("../") ||
+    source.startsWith("~/") ||
+    /^[a-zA-Z]:[\\/]/.test(source) ||
+    source.startsWith("\\\\")
+  );
+}
+
+function parseResolvedPathLine(line: string): string | undefined {
+  const resolvedMatch = line.match(/^resolved\s*:\s*(.+)$/i);
+  if (resolvedMatch?.[1]) {
+    return resolvedMatch[1].trim();
+  }
+
+  if (
+    line.startsWith("/") ||
+    line.startsWith("./") ||
+    line.startsWith("../") ||
+    /^[a-zA-Z]:[\\/]/.test(line) ||
+    line.startsWith("\\\\")
+  ) {
+    return line;
+  }
+
+  return undefined;
+}
+
 function parseInstalledPackagesOutputInternal(
   text: string,
-  options?: { dedupeByName?: boolean }
+  options?: { dedupeBySource?: boolean }
 ): InstalledPackage[] {
   const packages: InstalledPackage[] = [];
   const seenSources = new Set<string>();
-  const seenNames = new Set<string>();
 
   const lines = text.split("\n");
   let currentScope: "global" | "project" = "global";
+  let currentPackage: InstalledPackage | undefined;
 
-  for (const line of lines) {
-    // Skip empty lines and indented continuation lines (resolved paths)
-    if (!line.trim() || line.startsWith("    ")) continue;
+  for (const rawLine of lines) {
+    if (!rawLine.trim()) continue;
 
-    const trimmed = line.trim();
+    const isIndented = /^(?:\t+|\s{4,})/.test(rawLine);
+    const trimmed = rawLine.trim();
+
+    if (isIndented && currentPackage) {
+      const resolved = parseResolvedPathLine(trimmed);
+      if (resolved) {
+        currentPackage.resolvedPath = resolved;
+      }
+      continue;
+    }
 
     const lowerTrimmed = trimmed.toLowerCase();
-    if (
-      lowerTrimmed === "global" ||
-      lowerTrimmed.startsWith("global packages") ||
-      lowerTrimmed.startsWith("global:")
-    ) {
+    if (isScopeHeader(lowerTrimmed, "global")) {
       currentScope = "global";
+      currentPackage = undefined;
       continue;
     }
-    if (
-      lowerTrimmed === "project" ||
-      lowerTrimmed === "local" ||
-      lowerTrimmed.startsWith("project packages") ||
-      lowerTrimmed.startsWith("project:") ||
-      lowerTrimmed.startsWith("local packages") ||
-      lowerTrimmed.startsWith("local:")
-    ) {
+    if (isScopeHeader(lowerTrimmed, "project")) {
       currentScope = "project";
+      currentPackage = undefined;
       continue;
     }
 
-    const match = trimmed.match(/^[-•]?\s*(npm:|git:|https?:|\/|\.\/|\.\.\/)(.+)$/);
-    if (!match?.[1] || !match[2]) continue;
+    const candidate = trimmed.replace(/^[-•]?\s*/, "").trim();
+    if (!looksLikePackageSource(candidate)) continue;
 
-    const fullSource = match[1] + match[2];
-    if (seenSources.has(fullSource)) continue;
-    seenSources.add(fullSource);
+    const source = sanitizeListSourceSuffix(candidate);
+    if (options?.dedupeBySource !== false) {
+      const sourceIdentity = normalizeSourceIdentity(source);
+      if (seenSources.has(sourceIdentity)) {
+        currentPackage = undefined;
+        continue;
+      }
+      seenSources.add(sourceIdentity);
+    }
 
-    const { name, version } = parsePackageNameAndVersion(fullSource);
+    const { name, version } = parsePackageNameAndVersion(source);
 
-    if (options?.dedupeByName !== false && seenNames.has(name)) continue;
-    seenNames.add(name);
-
-    const pkg: InstalledPackage = { source: fullSource, name, scope: currentScope };
+    const pkg: InstalledPackage = { source, name, scope: currentScope };
     if (version !== undefined) {
       pkg.version = version;
     }
     packages.push(pkg);
+    currentPackage = pkg;
   }
 
   return packages;
 }
 
 export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
-  return parseInstalledPackagesOutputInternal(text, { dedupeByName: true });
+  return parseInstalledPackagesOutputInternal(text, { dedupeBySource: true });
 }
 
 export function parseInstalledPackagesOutputAllScopes(text: string): InstalledPackage[] {
-  return parseInstalledPackagesOutputInternal(text, { dedupeByName: false });
+  return parseInstalledPackagesOutputInternal(text, { dedupeBySource: false });
 }
 
 function extractGitPackageName(repoSpec: string): string {
@@ -223,7 +293,7 @@ function parsePackageNameAndVersion(fullSource: string): {
     }
   }
 
-  const pathParts = fullSource.split("/");
+  const pathParts = fullSource.split(/[\\/]/);
   const fileName = pathParts[pathParts.length - 1];
   return { name: fileName || fullSource };
 }
