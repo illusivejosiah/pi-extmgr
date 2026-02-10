@@ -13,16 +13,34 @@ A better way to manage Pi extensions. Browse, install, enable/disable, and remov
 pi install npm:pi-extmgr
 ```
 
-Then reload Pi with `/reload`.
+Then reload Pi.
 
-## What it does
+## Features
 
-- **Unified view**: See all your local extensions and installed npm/git packages in one list
-- **Toggle extensions**: Enable/disable local extensions with Space/Enter, save with `S`
-- **Package actions**: Update or remove installed packages with `A`
-- **Browse community**: Search and install from npm (`R` to browse)
-- **History tracking**: See what you've changed with `/extensions history`
-- **Smart reload prompt**: After applying extension state changes, extmgr can trigger reload directly from the UI
+- **Unified manager UI**
+  - Local extensions (`~/.pi/agent/extensions`, `.pi/extensions`) and installed packages in one list
+  - Scope indicators (global/project), status indicators, update badges
+- **Safe staged local extension toggles**
+  - Toggle with `Space/Enter`, apply with `S`
+  - Unsaved-change guard when leaving (save/discard/stay)
+- **Package management**
+  - Install, update, remove from UI and command line
+  - Quick actions (`A`, `u`, `X`) and bulk update (`U`)
+- **Remote discovery and install**
+  - npm search/browse with pagination
+  - Install by source (`npm:`, `git:`, URL, local path)
+  - Supports direct GitHub `.ts` installs and local standalone install mode
+- **Auto-update**
+  - Interactive wizard (`t` in manager, or `/extensions auto-update`)
+  - Persistent schedule stored across sessions
+  - Background checks + status bar updates
+- **Operational visibility**
+  - Session history (`/extensions history`)
+  - Cache controls (`/extensions clear-cache`)
+  - Status line summary (`pkg count • auto-update • known updates`)
+- **Interactive + non-interactive support**
+  - Works in TUI and non-UI modes
+  - Non-interactive commands for list/install/remove/update/auto-update
 
 ## Usage
 
@@ -41,11 +59,12 @@ Open the manager:
 | `S`           | Save changes                                     |
 | `Enter` / `A` | Actions on selected package (update/remove/view) |
 | `u`           | Update selected package directly                 |
-| `X`           | Remove selected package directly                 |
+| `X`           | Remove selected item (package/local extension)   |
 | `i`           | Quick install by source                          |
 | `f`           | Quick search                                     |
 | `U`           | Update all packages                              |
 | `t`           | Auto-update wizard                               |
+| `P` / `M`     | Quick actions palette                            |
 | `R`           | Browse remote packages                           |
 | `?` / `H`     | Help                                             |
 | `Esc`         | Exit                                             |
@@ -53,16 +72,50 @@ Open the manager:
 ### Commands
 
 ```bash
-/extensions                      # Open the manager
-/extensions search <query>       # Search npm
-/extensions install <source>     # Install package
+/extensions                      # Open interactive manager (default)
+/extensions local                # Alias: open interactive manager
+/extensions list                 # List local extensions
+/extensions remote               # Open remote package browser
+/extensions packages             # Alias: remote browser
+/extensions installed            # Installed packages view (legacy alias to unified flow)
+/extensions search <query>       # Search npm packages
+/extensions install <source> [--project|--global]  # Install package
 /extensions remove [source]      # Remove package
+/extensions uninstall [source]   # Alias: remove
 /extensions update [source]      # Update one package (or all when omitted)
-/extensions auto-update [every]  # No arg opens wizard; accepts 1d, 1w, never, etc.
-/extensions history              # View change history
-/extensions stats                # View statistics
+/extensions auto-update [every]  # No arg opens wizard in UI; accepts 1d, 1w, never, etc.
+/extensions history [options]    # View change history (supports filters)
 /extensions clear-cache          # Clear metadata cache
 ```
+
+### Non-interactive mode
+
+When Pi is running without UI, extmgr still supports command-driven workflows:
+
+- `/extensions list`
+- `/extensions installed`
+- `/extensions install <source> [--project|--global]`
+- `/extensions remove <source>`
+- `/extensions update [source]`
+- `/extensions history [options]`
+- `/extensions auto-update <duration>`
+
+Remote browsing/search menus require interactive mode.
+
+History options (works in non-interactive mode too):
+
+- `--limit <n>`
+- `--action <extension_toggle|package_install|package_update|package_remove|cache_clear>`
+- `--success` / `--failed`
+- `--package <query>`
+- `--since <duration>` (e.g. `30m`, `24h`, `7d`, `1mo`)
+- `--global` (non-interactive mode only; reads all persisted sessions)
+
+Examples:
+
+- `/extensions history --failed --limit 50`
+- `/extensions history --action package_update --since 7d`
+- `/extensions history --global --package extmgr --since 24h`
 
 ### Install sources
 
@@ -83,11 +136,7 @@ Open the manager:
   - **Local** (standalone): Copies to `~/.pi/agent/extensions/{package}/`, supports multi-file extensions
 - **Auto-update schedule is persistent**: `/extensions auto-update 1d` stays active across future Pi sessions.
 - **Reload is built-in**: When extmgr asks to reload, it calls `ctx.reload()` directly.
-- **Remove requires restart**: After removing a package, you need to fully restart Pi (not just `/reload`) for it to be completely unloaded.
-
-## Keyboard shortcut
-
-Press `Ctrl+Shift+E` anywhere to open the extension manager.
+- **Remove requires restart**: After removing a package, you need to fully restart Pi (not just a reload) for it to be completely unloaded.
 
 ## License
 

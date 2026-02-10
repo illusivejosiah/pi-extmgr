@@ -80,3 +80,29 @@ export function normalizePackageSource(source: string): string {
   }
   return `npm:${source}`;
 }
+
+export function parseNpmSource(
+  source: string
+): { name: string; version?: string | undefined } | undefined {
+  if (!source.startsWith("npm:")) return undefined;
+
+  const spec = source.slice(4).trim();
+  if (!spec) return undefined;
+
+  // npm:@scope/name@1.2.3 -> name=@scope/name, version=1.2.3
+  // npm:package@1.2.3     -> name=package, version=1.2.3
+  const separatorIndex = spec.lastIndexOf("@");
+
+  // Scoped package without version starts with '@' but has no second '@'
+  if (separatorIndex <= 0) {
+    return { name: spec };
+  }
+
+  const name = spec.slice(0, separatorIndex);
+  const version = spec.slice(separatorIndex + 1);
+
+  if (!name) return undefined;
+  if (!version) return { name };
+
+  return { name, version };
+}

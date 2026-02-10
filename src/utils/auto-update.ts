@@ -17,6 +17,7 @@ import {
   parseDuration,
   type AutoUpdateConfig,
 } from "./settings.js";
+import { parseNpmSource } from "./format.js";
 
 // Global timer reference (module-level singleton)
 let autoUpdateTimer: ReturnType<typeof setInterval> | null = null;
@@ -117,7 +118,8 @@ async function checkPackageUpdate(
   ctx: ExtensionCommandContext | ExtensionContext,
   pi: ExtensionAPI
 ): Promise<boolean> {
-  const pkgName = pkg.source.slice(4).split("@")[0];
+  const parsed = parseNpmSource(pkg.source);
+  const pkgName = parsed?.name;
   if (!pkgName) return false;
 
   try {

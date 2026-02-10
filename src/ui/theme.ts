@@ -4,17 +4,6 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
 /**
- * Get a theme-colored icon/string
- */
-export function themed(
-  theme: Theme,
-  color: "accent" | "success" | "error" | "warning" | "muted" | "dim" | "toolTitle",
-  text: string
-): string {
-  return theme.fg(color, text);
-}
-
-/**
  * Status icons that work across themes
  */
 export function getStatusIcon(
@@ -66,39 +55,6 @@ export function getScopeIcon(
     return dimGlobal ? theme.fg("muted", "G") : theme.fg("dim", "G");
   }
   return theme.fg("accent", "P");
-}
-
-/**
- * Navigation/action icons
- */
-export function getActionIcon(
-  theme: Theme,
-  action: "prev" | "next" | "refresh" | "back" | "menu"
-): string {
-  switch (action) {
-    case "prev":
-      return theme.fg("warning", "◀");
-    case "next":
-      return theme.fg("success", "▶");
-    case "refresh":
-      return theme.fg("accent", "↻");
-    case "back":
-      return theme.fg("muted", "←");
-    case "menu":
-      return theme.fg("muted", "☰");
-  }
-}
-
-/**
- * Format a label with theme color applied
- * Replaces the old themeLabel function that didn't use the color
- */
-export function themeLabel(
-  theme: Theme,
-  color: Parameters<typeof themed>[1],
-  text: string
-): string {
-  return themed(theme, color, text);
 }
 
 /**

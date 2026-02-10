@@ -77,5 +77,3 @@ export type BrowseAction =
   | { type: "main" }
   | { type: "help" }
   | { type: "cancel" };
-
-export type MenuAction = "browse" | "search" | "install" | "cancel" | "main" | "help";

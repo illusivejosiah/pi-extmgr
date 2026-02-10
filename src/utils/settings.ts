@@ -154,24 +154,6 @@ export function parseDuration(input: string): { ms: number; display: string } | 
 }
 
 /**
- * @deprecated Use parseDuration instead
- */
-export function parseSchedule(input: string): string | undefined {
-  const result = parseDuration(input);
-  return result?.display;
-}
-
-/**
- * Get human-readable schedule description
- */
-export function getScheduleDescription(config: AutoUpdateConfig): string {
-  if (!config.enabled || config.intervalMs === 0) {
-    return "off";
-  }
-  return config.displayText;
-}
-
-/**
  * Get interval in milliseconds
  */
 export function getScheduleInterval(config: AutoUpdateConfig): number | undefined {

@@ -7,8 +7,10 @@ import type {
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import type { InstalledPackage, NpmPackage, SearchCache } from "../types/index.js";
-import { PAGE_SIZE, CACHE_TTL } from "../constants.js";
+import { CACHE_TTL } from "../constants.js";
 import { readSummary } from "../utils/fs.js";
+import { parseNpmSource } from "../utils/format.js";
+import { splitGitRepoAndRef } from "../utils/package-source.js";
 
 let searchCache: SearchCache | null = null;
 
@@ -46,7 +48,9 @@ export async function searchNpmPackages(
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI
 ): Promise<NpmPackage[]> {
-  const searchLimit = Math.min(PAGE_SIZE + 10, 50);
+  // Pull more results so browse mode has meaningful pagination.
+  // npm search can still cap server-side, but this improves coverage.
+  const searchLimit = 250;
 
   // Check persistent cache first
   const cached = await getCachedSearch(query);
@@ -72,14 +76,7 @@ export async function searchNpmPackages(
 
   try {
     const parsed = JSON.parse(res.stdout || "[]") as NpmPackage[];
-    // Filter to only pi packages when browsing
-    const filtered = parsed.filter((p) => {
-      if (!p?.name) return false;
-      if (query.includes("keywords:pi-package")) {
-        return p.keywords?.includes("pi-package");
-      }
-      return true;
-    });
+    const filtered = parsed.filter((p) => !!p?.name);
 
     // Cache the results
     await setCachedSearch(query, filtered);
@@ -110,7 +107,10 @@ export async function getInstalledPackages(
   return packages;
 }
 
-export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
+function parseInstalledPackagesOutputInternal(
+  text: string,
+  options?: { dedupeByName?: boolean }
+): InstalledPackage[] {
   const packages: InstalledPackage[] = [];
   const seenSources = new Set<string>();
   const seenNames = new Set<string>();
@@ -154,7 +154,7 @@ export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
 
     const { name, version } = parsePackageNameAndVersion(fullSource);
 
-    if (seenNames.has(name)) continue;
+    if (options?.dedupeByName !== false && seenNames.has(name)) continue;
     seenNames.add(name);
 
     const pkg: InstalledPackage = { source: fullSource, name, scope: currentScope };
@@ -167,27 +167,52 @@ export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
   return packages;
 }
 
+export function parseInstalledPackagesOutput(text: string): InstalledPackage[] {
+  return parseInstalledPackagesOutputInternal(text, { dedupeByName: true });
+}
+
+export function parseInstalledPackagesOutputAllScopes(text: string): InstalledPackage[] {
+  return parseInstalledPackagesOutputInternal(text, { dedupeByName: false });
+}
+
+function extractGitPackageName(repoSpec: string): string {
+  // git@github.com:user/repo(.git)
+  if (repoSpec.startsWith("git@")) {
+    const afterColon = repoSpec.split(":").slice(1).join(":");
+    if (afterColon) {
+      const last = afterColon.split("/").pop() || afterColon;
+      return last.replace(/\.git$/i, "") || repoSpec;
+    }
+  }
+
+  // https://..., ssh://..., git://...
+  try {
+    const url = new URL(repoSpec);
+    const last = url.pathname.split("/").filter(Boolean).pop();
+    if (last) {
+      return last.replace(/\.git$/i, "") || repoSpec;
+    }
+  } catch {
+    // Fallback below
+  }
+
+  const last = repoSpec.split(/[/:]/).filter(Boolean).pop();
+  return (last ? last.replace(/\.git$/i, "") : repoSpec) || repoSpec;
+}
+
 function parsePackageNameAndVersion(fullSource: string): {
   name: string;
   version?: string | undefined;
 } {
-  if (fullSource.startsWith("npm:")) {
-    const npmPart = fullSource.slice(4);
-    const scopedMatch = npmPart.match(/^(@[^@]+\/[^@]+)@(.+)$/);
-    if (scopedMatch?.[1] && scopedMatch[2]) {
-      return { name: scopedMatch[1], version: scopedMatch[2] };
-    }
-
-    const simpleMatch = npmPart.match(/^([^@]+)@(.+)$/);
-    if (simpleMatch?.[1] && simpleMatch[2]) {
-      return { name: simpleMatch[1], version: simpleMatch[2] };
-    }
-
-    return { name: npmPart };
+  const parsedNpm = parseNpmSource(fullSource);
+  if (parsedNpm) {
+    return parsedNpm;
   }
 
   if (fullSource.startsWith("git:")) {
-    return { name: fullSource.slice(4).split("@")[0] || fullSource };
+    const gitSpec = fullSource.slice(4);
+    const { repo } = splitGitRepoAndRef(gitSpec);
+    return { name: extractGitPackageName(repo) };
   }
 
   if (fullSource.includes("node_modules/")) {
@@ -268,7 +293,9 @@ async function addPackageMetadata(
               pkg.description = await readSummary(pkg.source);
             }
           } else if (pkg.source.startsWith("npm:")) {
-            const pkgName = pkg.source.slice(4).split("@")[0];
+            const parsed = parseNpmSource(pkg.source);
+            const pkgName = parsed?.name;
+
             if (pkgName) {
               // Get description
               if (needsDescription) {

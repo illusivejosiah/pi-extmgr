@@ -3,6 +3,9 @@
  * This persists extension management actions to the session
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type ChangeAction =
   | "extension_toggle"
@@ -28,6 +31,22 @@ export interface ExtensionChangeEntry {
   error?: string | undefined;
 }
 
+export interface HistoryFilters {
+  limit?: number;
+  action?: ChangeAction;
+  success?: boolean;
+  packageQuery?: string;
+  sinceTimestamp?: number;
+}
+
+export interface GlobalHistoryEntry {
+  change: ExtensionChangeEntry;
+  sessionFile: string;
+}
+
+const EXT_CHANGE_CUSTOM_TYPE = "extmgr-change";
+const DEFAULT_SESSION_DIR = join(homedir(), ".pi", "agent", "sessions");
+
 /**
  * Log an extension change to the session
  */
@@ -37,7 +56,7 @@ export function logChange(pi: ExtensionAPI, change: Omit<ExtensionChangeEntry, "
     timestamp: Date.now(),
   };
 
-  pi.appendEntry("extmgr-change", entry);
+  pi.appendEntry(EXT_CHANGE_CUSTOM_TYPE, entry);
 }
 
 /**
@@ -127,16 +146,80 @@ export function logPackageRemove(
 }
 
 /**
- * Get recent changes from session entries
+ * Log cache clear operation
  */
-export function getRecentChanges(ctx: ExtensionCommandContext, limit = 10): ExtensionChangeEntry[] {
+export function logCacheClear(pi: ExtensionAPI, success: boolean, error?: string): void {
+  logChange(pi, {
+    action: "cache_clear",
+    success,
+    error,
+  });
+}
+
+function asChangeEntry(data: unknown): ExtensionChangeEntry | undefined {
+  if (!data || typeof data !== "object") return undefined;
+
+  const maybe = data as Partial<ExtensionChangeEntry>;
+  if (typeof maybe.action !== "string") return undefined;
+  if (typeof maybe.timestamp !== "number") return undefined;
+  if (typeof maybe.success !== "boolean") return undefined;
+
+  return maybe as ExtensionChangeEntry;
+}
+
+function matchesHistoryFilters(change: ExtensionChangeEntry, filters: HistoryFilters): boolean {
+  const packageQuery = filters.packageQuery?.toLowerCase().trim();
+
+  if (filters.action && change.action !== filters.action) return false;
+  if (typeof filters.success === "boolean" && change.success !== filters.success) return false;
+  if (filters.sinceTimestamp && change.timestamp < filters.sinceTimestamp) return false;
+
+  if (packageQuery) {
+    const packageName = change.packageName?.toLowerCase() ?? "";
+    const packageSource = change.packageSource?.toLowerCase() ?? "";
+    const extensionId = change.extensionId?.toLowerCase() ?? "";
+    if (
+      !packageName.includes(packageQuery) &&
+      !packageSource.includes(packageQuery) &&
+      !extensionId.includes(packageQuery)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function applyHistoryLimit<T>(entries: T[], filters: HistoryFilters = {}): T[] {
+  const limit = filters.limit ?? 20;
+  if (limit <= 0) {
+    return entries;
+  }
+  return entries.slice(-limit);
+}
+
+function applyHistoryFilters(
+  changes: ExtensionChangeEntry[],
+  filters: HistoryFilters = {}
+): ExtensionChangeEntry[] {
+  return applyHistoryLimit(
+    changes.filter((change) => matchesHistoryFilters(change, filters)),
+    filters
+  );
+}
+
+function getAllSessionChanges(ctx: ExtensionCommandContext): ExtensionChangeEntry[] {
   const entries = ctx.sessionManager.getEntries();
   const changes: ExtensionChangeEntry[] = [];
 
-  for (let i = entries.length - 1; i >= 0 && changes.length < limit; i--) {
-    const entry = entries[i];
-    if (entry && entry.type === "custom" && entry.customType === "extmgr-change" && entry.data) {
-      changes.unshift(entry.data as ExtensionChangeEntry);
+  for (const entry of entries) {
+    if (entry?.type !== "custom" || entry.customType !== EXT_CHANGE_CUSTOM_TYPE || !entry.data) {
+      continue;
+    }
+
+    const change = asChangeEntry(entry.data);
+    if (change) {
+      changes.push(change);
     }
   }
 
@@ -144,24 +227,112 @@ export function getRecentChanges(ctx: ExtensionCommandContext, limit = 10): Exte
 }
 
 /**
+ * Get filtered changes from the current session
+ */
+export function querySessionChanges(
+  ctx: ExtensionCommandContext,
+  filters: HistoryFilters = {}
+): ExtensionChangeEntry[] {
+  return applyHistoryFilters(getAllSessionChanges(ctx), filters);
+}
+
+async function walkSessionFiles(dir: string): Promise<string[]> {
+  const result: string[] = [];
+
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return result;
+  }
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      result.push(...(await walkSessionFiles(fullPath)));
+    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      result.push(fullPath);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Query change history across all persisted pi sessions.
+ */
+export async function queryGlobalHistory(
+  filters: HistoryFilters = {},
+  sessionDir = DEFAULT_SESSION_DIR
+): Promise<GlobalHistoryEntry[]> {
+  const files = await walkSessionFiles(sessionDir);
+  const all: GlobalHistoryEntry[] = [];
+
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+
+    const lines = text.split("\n").filter(Boolean);
+    for (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line) as unknown;
+      } catch {
+        continue;
+      }
+
+      if (!parsed || typeof parsed !== "object") continue;
+      const entry = parsed as {
+        type?: string;
+        customType?: string;
+        data?: unknown;
+      };
+
+      if (entry.type !== "custom" || entry.customType !== EXT_CHANGE_CUSTOM_TYPE || !entry.data) {
+        continue;
+      }
+
+      const change = asChangeEntry(entry.data);
+      if (change) {
+        all.push({ change, sessionFile: file });
+      }
+    }
+  }
+
+  all.sort((a, b) => a.change.timestamp - b.change.timestamp);
+
+  const filtered = all.filter((entry) => matchesHistoryFilters(entry.change, filters));
+  return applyHistoryLimit(filtered, filters);
+}
+
+/**
  * Format a change entry for display
  */
 export function formatChangeEntry(entry: ExtensionChangeEntry): string {
-  const time = new Date(entry.timestamp).toLocaleTimeString();
+  const time = new Date(entry.timestamp).toLocaleString();
   const icon = entry.success ? "✓" : "✗";
+  const packageLabel = entry.packageName ?? entry.packageSource ?? "unknown";
+  const sourceSuffix =
+    entry.packageSource && entry.packageSource !== entry.packageName
+      ? ` (${entry.packageSource})`
+      : "";
 
   switch (entry.action) {
     case "extension_toggle":
       return `[${time}] ${icon} ${entry.extensionId}: ${entry.fromState} → ${entry.toState}`;
 
     case "package_install":
-      return `[${time}] ${icon} Installed ${entry.packageName}${entry.version ? `@${entry.version}` : ""}`;
+      return `[${time}] ${icon} Installed ${packageLabel}${entry.version ? `@${entry.version}` : ""}${sourceSuffix}`;
 
     case "package_update":
-      return `[${time}] ${icon} Updated ${entry.packageName}${entry.version ? ` → @${entry.version}` : ""}`;
+      return `[${time}] ${icon} Updated ${packageLabel}${entry.version ? ` → @${entry.version}` : ""}${sourceSuffix}`;
 
     case "package_remove":
-      return `[${time}] ${icon} Removed ${entry.packageName}`;
+      return `[${time}] ${icon} Removed ${packageLabel}${sourceSuffix}`;
 
     case "cache_clear":
       return `[${time}] ${icon} Cache cleared`;
@@ -169,43 +340,4 @@ export function formatChangeEntry(entry: ExtensionChangeEntry): string {
     default:
       return `[${time}] ${icon} Unknown action`;
   }
-}
-
-/**
- * Get summary stats of changes
- */
-export function getChangeStats(ctx: ExtensionCommandContext): {
-  total: number;
-  successful: number;
-  failed: number;
-  byAction: Record<ChangeAction, number>;
-} {
-  const entries = ctx.sessionManager.getEntries();
-  const stats = {
-    total: 0,
-    successful: 0,
-    failed: 0,
-    byAction: {
-      extension_toggle: 0,
-      package_install: 0,
-      package_update: 0,
-      package_remove: 0,
-      cache_clear: 0,
-    },
-  };
-
-  for (const entry of entries) {
-    if (entry.type === "custom" && entry.customType === "extmgr-change" && entry.data) {
-      const change = entry.data as ExtensionChangeEntry;
-      stats.total++;
-      if (change.success) {
-        stats.successful++;
-      } else {
-        stats.failed++;
-      }
-      stats.byAction[change.action]++;
-    }
-  }
-
-  return stats;
 }

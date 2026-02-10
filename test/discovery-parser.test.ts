@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseInstalledPackagesOutput } from "../src/packages/discovery.js";
+import { parseNpmSource } from "../src/utils/format.js";
 
 void test("parseInstalledPackagesOutput parses scopes, names, and versions", () => {
   const input = `
@@ -33,7 +34,7 @@ Project packages:
 
   assert.deepEqual(result[2], {
     source: "git:https://github.com/user/repo.git@main",
-    name: "https://github.com/user/repo.git",
+    name: "repo",
     scope: "project",
   });
 
@@ -55,4 +56,25 @@ Project:
   const result = parseInstalledPackagesOutput(input);
   assert.equal(result.length, 1);
   assert.equal(result[0]?.name, "dup-pkg");
+});
+
+void test("parseInstalledPackagesOutput parses ssh git sources", () => {
+  const input = `
+Global:
+  git:git@github.com:user/super-ext.git@v1
+`;
+
+  const result = parseInstalledPackagesOutput(input);
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.name, "super-ext");
+});
+
+void test("parseNpmSource parses scoped and unscoped package specs", () => {
+  assert.deepEqual(parseNpmSource("npm:demo@1.2.3"), { name: "demo", version: "1.2.3" });
+  assert.deepEqual(parseNpmSource("npm:@scope/demo@1.2.3"), {
+    name: "@scope/demo",
+    version: "1.2.3",
+  });
+  assert.deepEqual(parseNpmSource("npm:@scope/demo"), { name: "@scope/demo" });
+  assert.equal(parseNpmSource("git:https://example.com/repo.git"), undefined);
 });

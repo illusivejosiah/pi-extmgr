@@ -1,8 +1,8 @@
 /**
  * Local extension discovery
  */
-import { readdir, rename } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, relative } from "node:path";
 import { homedir } from "node:os";
 import type { Dirent } from "node:fs";
 import type { ExtensionEntry, Scope, State } from "../types/index.js";
@@ -170,6 +170,41 @@ export async function setExtensionState(
       await rename(entry.activePath, entry.disabledPath);
     }
     return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function removeLocalExtension(
+  entry: Pick<ExtensionEntry, "activePath" | "disabledPath">,
+  cwd: string
+): Promise<
+  { ok: true; removedPath: string; removedDirectory: boolean } | { ok: false; error: string }
+> {
+  try {
+    const globalRoot = join(homedir(), ".pi", "agent", "extensions");
+    const projectRoot = join(cwd, ".pi", "extensions");
+
+    const activeExists = await fileExists(entry.activePath);
+    const disabledExists = await fileExists(entry.disabledPath);
+
+    if (!activeExists && !disabledExists) {
+      return { ok: false, error: "Extension file no longer exists" };
+    }
+
+    const existingPath = activeExists ? entry.activePath : entry.disabledPath;
+    const parentDir = dirname(existingPath);
+    const normalizedBase = basename(existingPath).replace(/\.disabled$/i, "");
+    const isIndexFile = /^index\.(ts|js)$/i.test(normalizedBase);
+    const isInsideExtensionDir = parentDir !== globalRoot && parentDir !== projectRoot;
+
+    if (isIndexFile && isInsideExtensionDir) {
+      await rm(parentDir, { recursive: true, force: true });
+      return { ok: true, removedPath: parentDir, removedDirectory: true };
+    }
+
+    await rm(existingPath, { force: true });
+    return { ok: true, removedPath: existingPath, removedDirectory: false };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

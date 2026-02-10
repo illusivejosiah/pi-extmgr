@@ -79,22 +79,6 @@ export function showProgress(ctx: ExtensionCommandContext, action: string, targe
 }
 
 /**
- * Handle operation result with appropriate notification
- */
-export function handleResult(
-  ctx: ExtensionCommandContext,
-  isSuccess: boolean,
-  successMsg: string,
-  errorMsg: string
-): void {
-  if (isSuccess) {
-    notify(ctx, successMsg, "info");
-  } else {
-    notify(ctx, errorMsg, "error");
-  }
-}
-
-/**
  * Format list output for display
  */
 export function formatListOutput(

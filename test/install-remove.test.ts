@@ -19,7 +19,7 @@ void test("removePackage calls pi remove", async () => {
 
   await removePackage("npm:pi-extmgr", ctx, pi);
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.command, "pi");
-  assert.deepEqual(calls[0]?.args, ["remove", "npm:pi-extmgr"]);
+  const removeCalls = calls.filter((c) => c.command === "pi" && c.args[0] === "remove");
+  assert.equal(removeCalls.length, 1);
+  assert.deepEqual(removeCalls[0]?.args, ["remove", "npm:pi-extmgr"]);
 });

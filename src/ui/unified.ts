@@ -15,7 +15,11 @@ import {
   Key,
 } from "@mariozechner/pi-tui";
 import type { UnifiedItem, State, UnifiedAction, InstalledPackage } from "../types/index.js";
-import { discoverExtensions, setExtensionState } from "../extensions/discovery.js";
+import {
+  discoverExtensions,
+  removeLocalExtension,
+  setExtensionState,
+} from "../extensions/discovery.js";
 import { getInstalledPackages } from "../packages/discovery.js";
 import {
   showPackageActions,
@@ -25,7 +29,6 @@ import {
 } from "../packages/management.js";
 import { showRemote } from "./remote.js";
 import { showHelp } from "./help.js";
-import { discoverExtensions as discoverExt } from "../extensions/discovery.js";
 import { formatEntry as formatExtEntry, dynamicTruncate, formatBytes } from "../utils/format.js";
 import {
   getStatusIcon,
@@ -36,6 +39,8 @@ import {
 } from "./theme.js";
 import { logExtensionToggle } from "../utils/history.js";
 import { getKnownUpdates, promptAutoUpdateWizard } from "../utils/auto-update.js";
+import { updateExtmgrStatus } from "../utils/status.js";
+import { parseChoiceByLabel } from "../utils/command.js";
 
 export async function showInteractive(
   ctx: ExtensionCommandContext,
@@ -92,14 +97,18 @@ async function showInteractiveOnce(
       new Text(
         theme.fg(
           "muted",
-          `${items.length} item${items.length === 1 ? "" : "s"} • Space/Enter toggle locals • Enter/A actions • u update pkg • x remove pkg`
+          `${items.length} item${items.length === 1 ? "" : "s"} • Space/Enter toggle locals • Enter/A actions • u update pkg • x remove selected`
         ),
         2,
         0
       )
     );
     container.addChild(
-      new Text(theme.fg("dim", "Quick: i Install | f Search | U Update all | t Auto-update"), 2, 0)
+      new Text(
+        theme.fg("dim", "Quick: i Install | f Search | U Update all | t Auto-update | p Palette"),
+        2,
+        0
+      )
     );
     container.addChild(new Spacer(1));
 
@@ -188,7 +197,7 @@ async function showInteractiveOnce(
           return;
         }
 
-        // Fast package actions
+        // Fast actions on selected row
         if (selectedId && selectedItem?.type === "package") {
           if (data === "u") {
             done({ type: "action", itemId: selectedId, action: "update" });
@@ -204,6 +213,13 @@ async function showInteractiveOnce(
           }
         }
 
+        if (selectedId && selectedItem?.type === "local") {
+          if (data === "x" || data === "X") {
+            done({ type: "action", itemId: selectedId, action: "remove" });
+            return;
+          }
+        }
+
         if (data === "r" || data === "R") {
           done({ type: "remote" });
           return;
@@ -212,7 +228,7 @@ async function showInteractiveOnce(
           done({ type: "help" });
           return;
         }
-        if (data === "m" || data === "M") {
+        if (data === "m" || data === "M" || data === "p" || data === "P") {
           done({ type: "menu" });
           return;
         }
@@ -310,10 +326,7 @@ function buildFooter(
   staged: Map<string, State>,
   byId: Map<string, UnifiedItem>
 ): string[] {
-  const hasChanges = Array.from(staged.entries()).some(([id, state]) => {
-    const item = byId.get(id);
-    return item?.type === "local" && item.originalState !== state;
-  });
+  const hasChanges = getPendingLocalChangeCount(staged, byId) > 0;
 
   const footerParts: string[] = [];
   footerParts.push("↑↓ Navigate");
@@ -321,11 +334,12 @@ function buildFooter(
   if (hasLocals) footerParts.push(hasChanges ? "S Save*" : "S Save");
   if (hasPackages) footerParts.push("Enter/A Actions");
   if (hasPackages) footerParts.push("u Update");
-  if (hasPackages) footerParts.push("X Remove");
+  if (hasPackages || hasLocals) footerParts.push("X Remove");
   footerParts.push("i Install");
   footerParts.push("f Search");
   footerParts.push("U Update all");
   footerParts.push("t Auto-update");
+  footerParts.push("P Palette");
   footerParts.push("R Browse");
   footerParts.push("? Help");
   footerParts.push("Esc Cancel");
@@ -378,97 +392,22 @@ function formatUnifiedItemLabel(
   }
 }
 
-async function handleUnifiedAction(
-  result: UnifiedAction,
-  items: UnifiedItem[],
+function getPendingLocalChangeCount(
   staged: Map<string, State>,
-  byId: Map<string, UnifiedItem>,
-  ctx: ExtensionCommandContext,
-  pi: ExtensionAPI
-): Promise<boolean> {
-  // Handle results
-  if (result.type === "cancel") {
-    if (staged.size > 0) {
-      ctx.ui.notify("No changes applied.", "info");
-    }
-    return true;
-  }
-
-  if (result.type === "remote") {
-    await showRemote("", ctx, pi);
-    return false;
-  }
-
-  if (result.type === "help") {
-    showHelp(ctx);
-    return false;
-  }
-
-  if (result.type === "menu") {
-    return false;
-  }
-
-  if (result.type === "quick") {
-    switch (result.action) {
-      case "install":
-        await showRemote("install", ctx, pi);
-        return false;
-      case "search":
-        await showRemote("search", ctx, pi);
-        return false;
-      case "update-all":
-        await updatePackages(ctx, pi);
-        return false;
-      case "auto-update":
-        await promptAutoUpdateWizard(pi, ctx, (packages) => {
-          ctx.ui.notify(
-            `Updates available for ${packages.length} package(s): ${packages.join(", ")}`,
-            "info"
-          );
-        });
-        return false;
+  byId: Map<string, UnifiedItem>
+): number {
+  let count = 0;
+  for (const [id, state] of staged.entries()) {
+    const item = byId.get(id);
+    if (item?.type === "local" && item.originalState !== state) {
+      count += 1;
     }
   }
+  return count;
+}
 
-  if (result.type === "action") {
-    const item = byId.get(result.itemId);
-    if (item?.type === "package") {
-      const pkg: InstalledPackage = {
-        source: item.source!,
-        name: item.displayName,
-        ...(item.version ? { version: item.version } : {}),
-        scope: item.scope as "global" | "project",
-        ...(item.description ? { description: item.description } : {}),
-        ...(item.size !== undefined ? { size: item.size } : {}),
-      };
-
-      switch (result.action) {
-        case "update":
-          await updatePackage(pkg.source, ctx, pi);
-          return false;
-        case "remove":
-          await removePackage(pkg.source, ctx, pi);
-          return false;
-        case "details": {
-          const sizeStr = pkg.size !== undefined ? `\nSize: ${formatBytes(pkg.size)}` : "";
-          ctx.ui.notify(
-            `Name: ${pkg.name}\nVersion: ${pkg.version || "unknown"}\nSource: ${pkg.source}\nScope: ${pkg.scope}${sizeStr}${pkg.description ? `\nDescription: ${pkg.description}` : ""}`,
-            "info"
-          );
-          return false;
-        }
-        case "menu":
-        default: {
-          const exitManager = await showPackageActions(pkg, ctx, pi);
-          return exitManager;
-        }
-      }
-    }
-    return false;
-  }
-
-  // Apply changes for local extensions
-  const localItems = items.filter(
+function getLocalItemsForApply(items: UnifiedItem[]): UnifiedItem[] {
+  return items.filter(
     (
       i
     ): i is UnifiedItem & {
@@ -478,7 +417,16 @@ async function handleUnifiedAction(
       originalState: State;
     } => i.type === "local" && !!i.activePath
   );
+}
 
+async function applyLocalChangesFromManager(
+  items: UnifiedItem[],
+  staged: Map<string, State>,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  options?: { promptReload?: boolean }
+): Promise<{ changed: number; reloaded: boolean }> {
+  const localItems = getLocalItemsForApply(items);
   const apply = await applyStagedChanges(localItems, staged, pi);
 
   if (apply.errors.length > 0) {
@@ -492,20 +440,301 @@ async function handleUnifiedAction(
     ctx.ui.notify(`Applied ${apply.changed} extension change(s).`, "info");
   }
 
-  // Prompt for reload if changes were made
   if (apply.changed > 0) {
-    const shouldReload = await ctx.ui.confirm(
-      "Reload Required",
-      "Extensions changed. Reload pi now?"
-    );
+    const shouldPromptReload = options?.promptReload ?? true;
 
-    if (shouldReload) {
-      await (ctx as ExtensionCommandContext & { reload: () => Promise<void> }).reload();
-      return true;
+    if (shouldPromptReload) {
+      const shouldReload = await ctx.ui.confirm(
+        "Reload Required",
+        "Extensions changed. Reload pi now?"
+      );
+
+      if (shouldReload) {
+        await (ctx as ExtensionCommandContext & { reload: () => Promise<void> }).reload();
+        return { changed: apply.changed, reloaded: true };
+      }
+    } else {
+      ctx.ui.notify(
+        "Changes saved. Reload pi later to fully apply extension state updates.",
+        "info"
+      );
     }
   }
 
-  return false;
+  return { changed: apply.changed, reloaded: false };
+}
+
+async function resolvePendingChangesBeforeLeave(
+  items: UnifiedItem[],
+  staged: Map<string, State>,
+  byId: Map<string, UnifiedItem>,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  destinationLabel: string
+): Promise<"continue" | "stay" | "exit"> {
+  const pendingCount = getPendingLocalChangeCount(staged, byId);
+  if (pendingCount === 0) return "continue";
+
+  const choice = await ctx.ui.select(`Unsaved changes (${pendingCount})`, [
+    `Save and continue to ${destinationLabel}`,
+    "Discard changes",
+    "Stay in manager",
+  ]);
+
+  if (!choice || choice === "Stay in manager") {
+    return "stay";
+  }
+
+  if (choice === "Discard changes") {
+    return "continue";
+  }
+
+  const result = await applyLocalChangesFromManager(items, staged, ctx, pi, {
+    promptReload: false,
+  });
+  return result.reloaded ? "exit" : "continue";
+}
+
+const PALETTE_OPTIONS = {
+  install: "📥 Install package",
+  search: "🔎 Search packages",
+  browse: "🌐 Browse community packages",
+  updateAll: "⬆️ Update all packages",
+  autoUpdate: "🔁 Auto-update settings",
+  help: "❓ Help",
+  back: "Back",
+} as const;
+
+type PaletteAction = keyof typeof PALETTE_OPTIONS;
+
+type QuickDestination = "install" | "search" | "browse" | "update-all" | "auto-update" | "help";
+
+const QUICK_DESTINATION_LABELS: Record<QuickDestination, string> = {
+  install: "Install",
+  search: "Search",
+  browse: "Remote",
+  "update-all": "Update",
+  "auto-update": "Auto-update",
+  help: "Help",
+};
+
+async function navigateWithPendingGuard(
+  destination: QuickDestination,
+  items: UnifiedItem[],
+  staged: Map<string, State>,
+  byId: Map<string, UnifiedItem>,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI
+): Promise<"done" | "stay" | "exit"> {
+  const pending = await resolvePendingChangesBeforeLeave(
+    items,
+    staged,
+    byId,
+    ctx,
+    pi,
+    QUICK_DESTINATION_LABELS[destination]
+  );
+  if (pending === "stay") return "stay";
+  if (pending === "exit") return "exit";
+
+  switch (destination) {
+    case "install":
+      await showRemote("install", ctx, pi);
+      return "done";
+    case "search":
+      await showRemote("search", ctx, pi);
+      return "done";
+    case "browse":
+      await showRemote("", ctx, pi);
+      return "done";
+    case "update-all":
+      await updatePackages(ctx, pi);
+      return "done";
+    case "auto-update":
+      await promptAutoUpdateWizard(pi, ctx, (packages) => {
+        ctx.ui.notify(
+          `Updates available for ${packages.length} package(s): ${packages.join(", ")}`,
+          "info"
+        );
+      });
+      void updateExtmgrStatus(ctx, pi);
+      return "done";
+    case "help":
+      showHelp(ctx);
+      return "done";
+  }
+}
+
+async function handleUnifiedAction(
+  result: UnifiedAction,
+  items: UnifiedItem[],
+  staged: Map<string, State>,
+  byId: Map<string, UnifiedItem>,
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI
+): Promise<boolean> {
+  if (result.type === "cancel") {
+    const pendingCount = getPendingLocalChangeCount(staged, byId);
+    if (pendingCount > 0) {
+      const choice = await ctx.ui.select(`Unsaved changes (${pendingCount})`, [
+        "Save and exit",
+        "Exit without saving",
+        "Stay in manager",
+      ]);
+
+      if (!choice || choice === "Stay in manager") {
+        return false;
+      }
+
+      if (choice === "Save and exit") {
+        const apply = await applyLocalChangesFromManager(items, staged, ctx, pi);
+        if (apply.reloaded) return true;
+      }
+    }
+
+    return true;
+  }
+
+  if (result.type === "remote") {
+    const pending = await resolvePendingChangesBeforeLeave(items, staged, byId, ctx, pi, "Remote");
+    if (pending === "stay") return false;
+    if (pending === "exit") return true;
+
+    await showRemote("", ctx, pi);
+    return false;
+  }
+
+  if (result.type === "help") {
+    const pending = await resolvePendingChangesBeforeLeave(items, staged, byId, ctx, pi, "Help");
+    if (pending === "stay") return false;
+    if (pending === "exit") return true;
+
+    showHelp(ctx);
+    return false;
+  }
+
+  if (result.type === "menu") {
+    const choice = parseChoiceByLabel(
+      PALETTE_OPTIONS,
+      await ctx.ui.select("Quick Actions", Object.values(PALETTE_OPTIONS))
+    );
+
+    const destinationByAction: Partial<Record<PaletteAction, QuickDestination>> = {
+      install: "install",
+      search: "search",
+      browse: "browse",
+      updateAll: "update-all",
+      autoUpdate: "auto-update",
+      help: "help",
+    };
+
+    const destination = choice ? destinationByAction[choice] : undefined;
+    if (!destination) {
+      return false;
+    }
+
+    const outcome = await navigateWithPendingGuard(destination, items, staged, byId, ctx, pi);
+    return outcome === "exit";
+  }
+
+  if (result.type === "quick") {
+    const quickDestinationMap: Record<(typeof result)["action"], QuickDestination> = {
+      install: "install",
+      search: "search",
+      "update-all": "update-all",
+      "auto-update": "auto-update",
+    };
+
+    const destination = quickDestinationMap[result.action];
+    const outcome = await navigateWithPendingGuard(destination, items, staged, byId, ctx, pi);
+    return outcome === "exit";
+  }
+
+  if (result.type === "action") {
+    const item = byId.get(result.itemId);
+    if (!item) return false;
+
+    const pendingDestination = item.type === "local" ? "remove extension" : "package actions";
+    const pending = await resolvePendingChangesBeforeLeave(
+      items,
+      staged,
+      byId,
+      ctx,
+      pi,
+      pendingDestination
+    );
+    if (pending === "stay") return false;
+    if (pending === "exit") return true;
+
+    if (item.type === "local") {
+      if (result.action !== "remove") return false;
+
+      const confirmed = await ctx.ui.confirm(
+        "Delete Local Extension",
+        `Delete ${item.displayName} from disk?\n\nThis cannot be undone.`
+      );
+      if (!confirmed) return false;
+
+      const removal = await removeLocalExtension(
+        { activePath: item.activePath!, disabledPath: item.disabledPath! },
+        ctx.cwd
+      );
+      if (!removal.ok) {
+        ctx.ui.notify(`Failed to remove extension: ${removal.error}`, "error");
+        return false;
+      }
+
+      ctx.ui.notify(
+        `Removed ${item.displayName}${removal.removedDirectory ? " (directory)" : ""}.`,
+        "info"
+      );
+
+      const shouldReload = await ctx.ui.confirm(
+        "Reload Recommended",
+        "Extension removed. Reload pi now?"
+      );
+      if (shouldReload) {
+        await (ctx as ExtensionCommandContext & { reload: () => Promise<void> }).reload();
+        return true;
+      }
+
+      return false;
+    }
+
+    const pkg: InstalledPackage = {
+      source: item.source!,
+      name: item.displayName,
+      ...(item.version ? { version: item.version } : {}),
+      scope: item.scope as "global" | "project",
+      ...(item.description ? { description: item.description } : {}),
+      ...(item.size !== undefined ? { size: item.size } : {}),
+    };
+
+    switch (result.action) {
+      case "update":
+        await updatePackage(pkg.source, ctx, pi);
+        return false;
+      case "remove":
+        await removePackage(pkg.source, ctx, pi);
+        return false;
+      case "details": {
+        const sizeStr = pkg.size !== undefined ? `\nSize: ${formatBytes(pkg.size)}` : "";
+        ctx.ui.notify(
+          `Name: ${pkg.name}\nVersion: ${pkg.version || "unknown"}\nSource: ${pkg.source}\nScope: ${pkg.scope}${sizeStr}${pkg.description ? `\nDescription: ${pkg.description}` : ""}`,
+          "info"
+        );
+        return false;
+      }
+      case "menu":
+      default: {
+        const exitManager = await showPackageActions(pkg, ctx, pi);
+        return exitManager;
+      }
+    }
+  }
+
+  const apply = await applyLocalChangesFromManager(items, staged, ctx, pi);
+  return apply.reloaded;
 }
 
 async function applyStagedChanges(
@@ -558,7 +787,7 @@ export async function showInstalledPackagesLegacy(
 
 // List-only view for non-interactive mode
 export async function showListOnly(ctx: ExtensionCommandContext): Promise<void> {
-  const entries = await discoverExt(ctx.cwd);
+  const entries = await discoverExtensions(ctx.cwd);
   if (entries.length === 0) {
     const msg = "No extensions found in ~/.pi/agent/extensions or .pi/extensions";
     if (ctx.hasUI) {

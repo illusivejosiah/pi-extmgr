@@ -8,7 +8,8 @@ import type { NpmPackage, InstalledPackage } from "../types/index.js";
 
 const CACHE_DIR = join(homedir(), ".pi", "agent", ".extmgr-cache");
 const CACHE_FILE = join(CACHE_DIR, "metadata.json");
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours (package metadata)
+const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes (search results)
 
 interface CachedPackageData {
   name: string;
@@ -136,11 +137,11 @@ export async function setCachedPackage(
 export async function getCachedSearch(query: string): Promise<NpmPackage[] | null> {
   const cache = await loadCache();
 
-  if (
-    !cache.lastSearch ||
-    cache.lastSearch.query !== query ||
-    !isCacheValid(cache.lastSearch.timestamp)
-  ) {
+  if (!cache.lastSearch || cache.lastSearch.query !== query) {
+    return null;
+  }
+
+  if (Date.now() - cache.lastSearch.timestamp >= SEARCH_CACHE_TTL_MS) {
     return null;
   }
 
