@@ -385,6 +385,80 @@ export async function discoverPackageResources(
   return entries;
 }
 
+/**
+ * Apply defaultDisabled for newly installed packages.
+ * If a package declares `pi.defaultDisabled: true` in its package.json
+ * and its settings.json entry is still a plain string (never configured),
+ * convert it to the disabled format with all resource types set to [].
+ */
+export async function applyDefaultDisabled(cwd: string): Promise<number> {
+  let applied = 0;
+
+  for (const scope of ["global", "project"] as const) {
+    const settingsPath = getSettingsPath(scope, cwd);
+    let settings: SettingsFile;
+    try {
+      settings = await readSettingsFile(settingsPath, { strict: true });
+    } catch {
+      continue;
+    }
+
+    const packages = [...(settings.packages ?? [])];
+    let changed = false;
+
+    for (let i = 0; i < packages.length; i++) {
+      const entry = packages[i];
+      // Only process plain string entries (never configured)
+      if (typeof entry !== "string") continue;
+
+      const packageRoot = resolvePackageRoot(entry, scope, cwd);
+      if (!packageRoot) continue;
+
+      try {
+        const raw = await readFile(join(packageRoot, "package.json"), "utf8");
+        const parsed = JSON.parse(raw) as { pi?: { defaultDisabled?: boolean } };
+        if (parsed.pi?.defaultDisabled === true) {
+          packages[i] = {
+            source: entry,
+            extensions: [],
+            skills: [],
+            prompts: [],
+            themes: [],
+          };
+          changed = true;
+          applied++;
+        }
+      } catch { /* skip unreadable */ }
+    }
+
+    if (changed) {
+      settings.packages = packages;
+      await writeSettingsFile(settingsPath, settings);
+    }
+  }
+
+  return applied;
+}
+
+function resolvePackageRoot(source: string, scope: "global" | "project", cwd: string): string | null {
+  const agentDir = scope === "global" ? getAgentDir() : join(cwd, ".pi", "agent");
+
+  if (source.startsWith("git:")) {
+    // git:git@github.com:org/repo.git → ~/.pi/agent/git/github.com/org/repo
+    const url = source.slice(4);
+    const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    if (match) {
+      const repoPath = match[1];
+      return join(agentDir, "git", "github.com", repoPath);
+    }
+  } else if (source.startsWith("npm:")) {
+    const name = source.slice(4);
+    return join(agentDir, "npm", "node_modules", name);
+  }
+
+  return null;
+}
+
 export function toProjectRelativePath(path: string, cwd: string): string {
   const rel = relative(cwd, path);
   return rel.startsWith("..") ? path : normalizeRelativePath(rel);

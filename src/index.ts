@@ -17,6 +17,7 @@ import {
   stopAutoUpdateTimer,
   type ContextProvider,
 } from "./utils/auto-update.js";
+import { applyDefaultDisabled } from "./packages/extensions.js";
 import { hydrateAutoUpdateConfig } from "./utils/settings.js";
 import {
   getExtensionsAutocompleteItems,
@@ -67,6 +68,14 @@ export default function extensionsManager(pi: ExtensionAPI) {
   }
 
   async function bootstrapSession(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+    // Apply defaultDisabled for newly installed packages
+    try {
+      const count = await applyDefaultDisabled(ctx.cwd);
+      if (count > 0) {
+        console.log(`[extmgr] Applied defaultDisabled to ${count} package(s)`);
+      }
+    } catch { /* non-fatal */ }
+
     // Restore persisted auto-update config into session entries so sync lookups are valid.
     await hydrateAutoUpdateConfig(pi, ctx);
 
