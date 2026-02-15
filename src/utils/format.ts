@@ -93,6 +93,10 @@ export function normalizePackageSource(source: string): string {
   const trimmed = source.trim();
   if (!trimmed) return trimmed;
 
+  if (/^git@[^\s:]+:.+/.test(trimmed)) {
+    return `git:${trimmed}`;
+  }
+
   if (isPackageSource(trimmed)) {
     return trimmed;
   }

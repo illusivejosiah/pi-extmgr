@@ -67,10 +67,10 @@ export default function extensionsManager(pi: ExtensionAPI) {
   }
 
   async function bootstrapSession(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
-    if (!ctx.hasUI) return;
-
     // Restore persisted auto-update config into session entries so sync lookups are valid.
     await hydrateAutoUpdateConfig(pi, ctx);
+
+    if (!ctx.hasUI) return;
 
     const getCtx: ContextProvider = () => ctx;
     startAutoUpdateTimer(pi, getCtx, createAutoUpdateNotificationHandler(ctx));

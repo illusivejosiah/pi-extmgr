@@ -110,7 +110,6 @@ export function logPackageUpdate(
   pi: ExtensionAPI,
   source: string,
   name: string,
-  _fromVersion: string | undefined,
   toVersion: string | undefined,
   success: boolean,
   error?: string

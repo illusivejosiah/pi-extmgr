@@ -50,7 +50,7 @@ export function startAutoUpdateTimer(
   const interval = getScheduleInterval(config);
   if (!interval) return;
 
-  // Check immediately if it's time
+  // Run an initial check immediately.
   void (async () => {
     const checkCtx = getCtx();
     if (!checkCtx) return;
@@ -266,13 +266,7 @@ export function enableAutoUpdate(
 
   saveAutoUpdateConfig(pi, config);
 
-  // Create a context provider that returns the current context
-  const getCtx: ContextProvider = () => {
-    // In a real implementation, this would need to be updated
-    // when the session changes. For now, we return the current context
-    // and rely on the interval checking for valid context.
-    return ctx;
-  };
+  const getCtx: ContextProvider = () => ctx;
 
   startAutoUpdateTimer(pi, getCtx, onUpdateAvailable);
 

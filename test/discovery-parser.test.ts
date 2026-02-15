@@ -122,7 +122,7 @@ Global:
 void test("normalizePackageSource preserves git and local path sources", () => {
   assert.equal(
     normalizePackageSource("git@github.com:user/repo.git"),
-    "git@github.com:user/repo.git"
+    "git:git@github.com:user/repo.git"
   );
   assert.equal(
     normalizePackageSource("ssh://git@github.com/user/repo.git"),

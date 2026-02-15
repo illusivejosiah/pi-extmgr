@@ -102,6 +102,35 @@ void test("setPackageExtensionState converts string package entries and keeps la
   }
 });
 
+void test("discoverPackageExtensions resolves file:// package sources", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-extmgr-cwd-"));
+  const pkgRoot = join(cwd, "vendor", "filepkg");
+
+  try {
+    await mkdir(pkgRoot, { recursive: true });
+    await writeFile(
+      join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "filepkg", pi: { extensions: ["./index.ts"] } }, null, 2),
+      "utf8"
+    );
+    await writeFile(join(pkgRoot, "index.ts"), "// file package extension\n", "utf8");
+
+    const installed: InstalledPackage[] = [
+      {
+        source: `file://${pkgRoot}`,
+        name: "filepkg",
+        scope: "project",
+      },
+    ];
+
+    const discovered = await discoverPackageExtensions(installed, cwd);
+    assert.equal(discovered.length, 1);
+    assert.equal(discovered[0]?.extensionPath, "index.ts");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 void test("setPackageExtensionState fails safely when settings.json is invalid", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-extmgr-cwd-"));
   const agentDir = await mkdtemp(join(tmpdir(), "pi-extmgr-agent-"));

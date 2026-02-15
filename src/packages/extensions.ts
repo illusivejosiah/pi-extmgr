@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { InstalledPackage, PackageExtensionEntry, Scope, State } from "../types/index.js";
 import { fileExists, readSummary } from "../utils/fs.js";
@@ -30,6 +32,14 @@ function toPackageRoot(pkg: InstalledPackage, cwd: string): string | undefined {
     return resolve(pkg.resolvedPath);
   }
 
+  if (pkg.source.startsWith("file://")) {
+    try {
+      return resolve(fileURLToPath(pkg.source));
+    } catch {
+      return undefined;
+    }
+  }
+
   if (
     pkg.source.startsWith("/") ||
     /^[a-zA-Z]:[\\/]/.test(pkg.source) ||
@@ -38,8 +48,17 @@ function toPackageRoot(pkg: InstalledPackage, cwd: string): string | undefined {
     return resolve(pkg.source);
   }
 
-  if (pkg.source.startsWith("./") || pkg.source.startsWith("../")) {
+  if (
+    pkg.source.startsWith("./") ||
+    pkg.source.startsWith("../") ||
+    pkg.source.startsWith(".\\") ||
+    pkg.source.startsWith("..\\")
+  ) {
     return resolve(cwd, pkg.source);
+  }
+
+  if (pkg.source.startsWith("~/")) {
+    return resolve(join(homedir(), pkg.source.slice(2)));
   }
 
   return undefined;

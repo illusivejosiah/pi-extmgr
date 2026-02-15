@@ -9,7 +9,7 @@ import {
   parseInstalledPackagesOutputAllScopes,
 } from "./discovery.js";
 import { formatInstalledPackageLabel, formatBytes, parseNpmSource } from "../utils/format.js";
-import { splitGitRepoAndRef } from "../utils/package-source.js";
+import { getPackageSourceKind, splitGitRepoAndRef } from "../utils/package-source.js";
 import { logPackageUpdate, logPackageRemove } from "../utils/history.js";
 import { notify, error as notifyError, success } from "../utils/notify.js";
 import {
@@ -53,7 +53,7 @@ async function updatePackageInternal(
 
   if (res.code !== 0) {
     const errorMsg = `Update failed: ${res.stderr || res.stdout || `exit ${res.code}`}`;
-    logPackageUpdate(pi, source, source, undefined, undefined, false, errorMsg);
+    logPackageUpdate(pi, source, source, undefined, false, errorMsg);
     notifyError(ctx, errorMsg);
     void updateExtmgrStatus(ctx, pi);
     return NO_PACKAGE_MUTATION_OUTCOME;
@@ -62,12 +62,12 @@ async function updatePackageInternal(
   const stdout = res.stdout || "";
   if (stdout.includes("already up to date") || stdout.includes("pinned")) {
     notify(ctx, `${source} is already up to date (or pinned).`, "info");
-    logPackageUpdate(pi, source, source, undefined, undefined, true);
+    logPackageUpdate(pi, source, source, undefined, true);
     void updateExtmgrStatus(ctx, pi);
     return NO_PACKAGE_MUTATION_OUTCOME;
   }
 
-  logPackageUpdate(pi, source, source, undefined, undefined, true);
+  logPackageUpdate(pi, source, source, undefined, true);
   success(ctx, `Updated ${source}`);
   void updateExtmgrStatus(ctx, pi);
 
@@ -139,8 +139,9 @@ function packageIdentity(source: string, fallbackName?: string): string {
     return `npm:${npm.name}`;
   }
 
-  if (source.startsWith("git:")) {
-    const { repo } = splitGitRepoAndRef(source.slice(4));
+  if (getPackageSourceKind(source) === "git") {
+    const gitSpec = source.startsWith("git:") ? source.slice(4) : source;
+    const { repo } = splitGitRepoAndRef(gitSpec);
     return `git:${repo}`;
   }
 

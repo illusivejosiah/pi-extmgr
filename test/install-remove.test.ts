@@ -14,6 +14,16 @@ void test("installPackage calls pi install with normalized npm source", async ()
   assert.deepEqual(calls[0]?.args, ["install", "npm:pi-extmgr"]);
 });
 
+void test("installPackage normalizes git@ sources to git: prefix", async () => {
+  const { pi, ctx, calls } = createMockHarness();
+
+  await installPackage("git@github.com:user/repo.git", ctx, pi);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.command, "pi");
+  assert.deepEqual(calls[0]?.args, ["install", "git:git@github.com:user/repo.git"]);
+});
+
 void test("removePackage calls pi remove", async () => {
   const { pi, ctx, calls } = createMockHarness();
 
