@@ -9,6 +9,7 @@ import {
   parseInstalledPackagesOutputAllScopes,
 } from "./discovery.js";
 import { formatInstalledPackageLabel, formatBytes, parseNpmSource } from "../utils/format.js";
+import { isPackageDisabled, setPackageDisabled } from "./extensions.js";
 import { getPackageSourceKind, splitGitRepoAndRef } from "../utils/package-source.js";
 import { logPackageUpdate, logPackageRemove } from "../utils/history.js";
 import { clearUpdatesAvailable } from "../utils/settings.js";
@@ -397,7 +398,11 @@ export async function showPackageActions(
     return true;
   }
 
+  const disabled = await isPackageDisabled(pkg.source, pkg.scope, ctx.cwd);
+  const toggleLabel = disabled ? `Enable ${pkg.name}` : `Disable ${pkg.name}`;
+
   const choice = await ctx.ui.select(pkg.name, [
+    toggleLabel,
     `Remove ${pkg.name}`,
     `Update ${pkg.name}`,
     "View details",
@@ -408,15 +413,28 @@ export async function showPackageActions(
     return false;
   }
 
-  const action = choice.startsWith("Remove")
-    ? "remove"
-    : choice.startsWith("Update")
-      ? "update"
-      : choice.includes("details")
-        ? "details"
-        : "back";
+  const action = choice.startsWith("Enable") || choice.startsWith("Disable")
+    ? "toggle"
+    : choice.startsWith("Remove")
+      ? "remove"
+      : choice.startsWith("Update")
+        ? "update"
+        : choice.includes("details")
+          ? "details"
+          : "back";
 
   switch (action) {
+    case "toggle": {
+      const nowDisabled = !disabled;
+      const result = await setPackageDisabled(pkg.source, pkg.scope, nowDisabled, ctx.cwd);
+      if (result.ok) {
+        const verb = nowDisabled ? "Disabled" : "Enabled";
+        success(ctx, `${verb} ${pkg.name}. Restart pi to apply.`);
+      } else {
+        notifyError(ctx, `Failed to toggle ${pkg.name}: ${result.error}`);
+      }
+      return false;
+    }
     case "remove": {
       const outcome = await removePackageWithOutcome(pkg.source, ctx, pi);
       return outcome.reloaded || outcome.restartRequested;

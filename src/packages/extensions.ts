@@ -9,6 +9,9 @@ import { fileExists, readSummary } from "../utils/fs.js";
 interface PackageSettingsObject {
   source: string;
   extensions?: string[];
+  skills?: string[];
+  prompts?: string[];
+  themes?: string[];
 }
 
 interface SettingsFile {
@@ -313,4 +316,87 @@ export async function setPackageExtensionState(
 export function toProjectRelativePath(path: string, cwd: string): string {
   const rel = relative(cwd, path);
   return rel.startsWith("..") ? path : normalizeRelativePath(rel);
+}
+
+/**
+ * Check if an entire package is disabled (all resource types set to empty arrays).
+ */
+export async function isPackageDisabled(
+  packageSource: string,
+  scope: Scope,
+  cwd: string
+): Promise<boolean> {
+  const settingsPath = getSettingsPath(scope, cwd);
+  const settings = await readSettingsFile(settingsPath);
+  const packages = settings.packages ?? [];
+  const normalizedSource = normalizeSource(packageSource);
+
+  const entry = packages.find((pkg) => {
+    if (typeof pkg === "string") return normalizeSource(pkg) === normalizedSource;
+    return normalizeSource(pkg.source) === normalizedSource;
+  });
+
+  if (!entry || typeof entry === "string") return false;
+
+  // Disabled = all four resource types are explicitly set to empty arrays
+  const resourceTypes = ["extensions", "skills", "prompts", "themes"] as const;
+  return resourceTypes.every((rt) => {
+    const val = entry[rt];
+    return Array.isArray(val) && val.length === 0;
+  });
+}
+
+/**
+ * Disable an entire package by setting all resource types to empty arrays.
+ * The package stays installed on disk but nothing loads.
+ */
+export async function setPackageDisabled(
+  packageSource: string,
+  scope: Scope,
+  disabled: boolean,
+  cwd: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const settingsPath = getSettingsPath(scope, cwd);
+    const settings = await readSettingsFile(settingsPath, { strict: true });
+    const packages = [...(settings.packages ?? [])];
+    const normalizedSource = normalizeSource(packageSource);
+
+    const index = packages.findIndex((pkg) => {
+      if (typeof pkg === "string") return normalizeSource(pkg) === normalizedSource;
+      return normalizeSource(pkg.source) === normalizedSource;
+    });
+
+    if (disabled) {
+      // Set all resource types to empty arrays (pi loader treats [] as "load nothing")
+      const disabledEntry: PackageSettingsObject = {
+        source: typeof packages[index] === "string" ? packages[index] : (packages[index] as PackageSettingsObject).source,
+        extensions: [],
+        skills: [],
+        prompts: [],
+        themes: [],
+      };
+      if (index === -1) {
+        packages.push(disabledEntry);
+      } else {
+        packages[index] = disabledEntry;
+      }
+    } else {
+      // Re-enable: revert to plain string source
+      if (index !== -1) {
+        const existing = packages[index];
+        const source = typeof existing === "string" ? existing : existing.source;
+        packages[index] = source;
+      }
+    }
+
+    settings.packages = packages;
+    await writeSettingsFile(settingsPath, settings);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

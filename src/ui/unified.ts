@@ -27,7 +27,7 @@ import {
   setExtensionState,
 } from "../extensions/discovery.js";
 import { getInstalledPackages } from "../packages/discovery.js";
-import { discoverPackageExtensions, setPackageExtensionState } from "../packages/extensions.js";
+import { discoverPackageExtensions, setPackageExtensionState, isPackageDisabled } from "../packages/extensions.js";
 import {
   showPackageActions,
   updatePackageWithOutcome,
@@ -95,7 +95,7 @@ async function showInteractiveOnce(
 
   // Build unified items list
   const knownUpdates = getKnownUpdates(ctx);
-  const items = buildUnifiedItems(localEntries, installedPackages, packageExtensions, knownUpdates);
+  const items = await buildUnifiedItems(localEntries, installedPackages, packageExtensions, knownUpdates, ctx.cwd);
 
   // If nothing found, show quick actions
   if (items.length === 0) {
@@ -269,12 +269,13 @@ async function showInteractiveOnce(
   return await handleUnifiedAction(result, items, staged, byId, ctx, pi);
 }
 
-export function buildUnifiedItems(
+export async function buildUnifiedItems(
   localEntries: Awaited<ReturnType<typeof discoverExtensions>>,
   installedPackages: InstalledPackage[],
   packageExtensions: PackageExtensionEntry[],
-  knownUpdates: Set<string>
-): UnifiedItem[] {
+  knownUpdates: Set<string>,
+  cwd: string
+): Promise<UnifiedItem[]> {
   const items: UnifiedItem[] = [];
   const localPaths = new Set<string>();
 
@@ -344,6 +345,7 @@ export function buildUnifiedItems(
     }
     if (isDuplicate) continue;
 
+    const disabled = await isPackageDisabled(pkg.source, pkg.scope, cwd);
     items.push({
       type: "package",
       id: `pkg:${pkg.source}`,
@@ -355,6 +357,8 @@ export function buildUnifiedItems(
       description: pkg.description,
       size: pkg.size,
       updateAvailable: knownUpdates.has(pkg.name),
+      state: disabled ? "disabled" : "enabled",
+      originalState: disabled ? "disabled" : "enabled",
     });
   }
 
@@ -393,8 +397,8 @@ function buildSettingsItems(
 
     return {
       id: item.id,
-      label: formatUnifiedItemLabel(item, "enabled", theme, false),
-      currentValue: "enabled",
+      label: formatUnifiedItemLabel(item, item.state ?? "enabled", theme, false),
+      currentValue: item.state ?? "enabled",
       values: ["enabled"],
     };
   });
@@ -489,7 +493,8 @@ function formatUnifiedItemLabel(
   }
 
   const summary = theme.fg("dim", infoParts.join(" • "));
-  return `${pkgIcon} [${scopeIcon}] ${name}${version}${updateBadge} - ${summary}`;
+  const disabledBadge = state === "disabled" ? ` ${theme.fg("error", "[disabled]")}` : "";
+  return `${pkgIcon} [${scopeIcon}] ${name}${version}${updateBadge}${disabledBadge} - ${summary}`;
 }
 
 function getPendingToggleChangeCount(
