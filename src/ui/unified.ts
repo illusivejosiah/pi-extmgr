@@ -4,7 +4,9 @@
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import { getSettingsListTheme, DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, getSettingsListTheme, DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   Container,
   SettingsList,
@@ -125,8 +127,23 @@ async function showInteractiveOnce(
   const staged = new Map<string, State>();
   const byId = new Map(items.map((item) => [item.id, item]));
 
-  // Collapse state: track which package IDs are collapsed
-  const collapsed = new Set<string>();
+  // Collapse state: persisted to disk, default all packages collapsed
+  const collapseStatePath = join(getAgentDir(), ".extmgr-collapse.json");
+  let collapsed: Set<string>;
+  try {
+    const raw = readFileSync(collapseStatePath, "utf8");
+    const parsed = JSON.parse(raw) as string[];
+    collapsed = new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    // Default: all packages collapsed
+    collapsed = new Set(items.filter((i) => i.type === "package").map((i) => i.id));
+  }
+
+  function saveCollapseState() {
+    try {
+      writeFileSync(collapseStatePath, JSON.stringify([...collapsed]));
+    } catch { /* ignore */ }
+  }
 
   // Map each child item to its parent package ID
   const parentOf = new Map<string, string>();
@@ -276,6 +293,7 @@ async function showInteractiveOnce(
         if (data === "\x1b[D" && selectedItem?.type === "package") {
           if (!collapsed.has(selectedId)) {
             collapsed.add(selectedId);
+            saveCollapseState();
             rebuildList(selectedId);
           }
           return;
@@ -285,6 +303,7 @@ async function showInteractiveOnce(
         if (data === "\x1b[C" && selectedItem?.type === "package") {
           if (collapsed.has(selectedId)) {
             collapsed.delete(selectedId);
+            saveCollapseState();
             rebuildList(selectedId);
           }
           return;
