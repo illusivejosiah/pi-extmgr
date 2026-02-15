@@ -286,14 +286,8 @@ export function buildUnifiedItems(
     packageExtensionGroups.set(key, group);
   }
 
-  const visiblePackageExtensions = packageExtensions.filter((entry) => {
-    const key = `${entry.packageScope}:${entry.packageSource.toLowerCase()}`;
-    const group = packageExtensionGroups.get(key) ?? [];
-
-    // Avoid duplicate-looking rows for packages that expose a single enabled extension entrypoint.
-    // Keep extension rows when there are multiple entrypoints, or when an entry is disabled so it can be re-enabled.
-    return group.length > 1 || entry.state === "disabled";
-  });
+  // Show all package extension rows so they can be individually toggled on/off.
+  const visiblePackageExtensions = packageExtensions;
 
   // Add local extensions
   for (const entry of localEntries) {
