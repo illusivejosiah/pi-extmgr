@@ -28,7 +28,7 @@ Then reload Pi.
   - Quick actions (`A`, `u`, `X`) and bulk update (`U`)
 - **Remote discovery and install**
   - npm search/browse with pagination
-  - Install by source (`npm:`, `git:`, URL, local path)
+  - Install by source (`npm:`, `git:`, `https://`, `ssh://`, `git@...`, local path)
   - Supports direct GitHub `.ts` installs and local standalone install mode
 - **Auto-update**
   - Interactive wizard (`t` in manager, or `/extensions auto-update`)
@@ -123,6 +123,8 @@ Examples:
 /extensions install npm:package-name
 /extensions install @scope/package
 /extensions install git:https://github.com/user/repo.git
+/extensions install git:git@github.com:user/repo.git
+/extensions install ssh://git@github.com/user/repo.git
 /extensions install https://github.com/user/repo/blob/main/extension.ts
 /extensions install /path/to/extension.ts
 /extensions install ./local-folder/
@@ -135,6 +137,8 @@ Examples:
   - **Managed** (npm): Auto-updates with `pi update`, stored in pi's package cache
   - **Local** (standalone): Copies to `~/.pi/agent/extensions/{package}/`, supports multi-file extensions
 - **Auto-update schedule is persistent**: `/extensions auto-update 1d` stays active across future Pi sessions and is restored when switching sessions.
+- **Settings/cache writes are hardened**: extmgr serializes writes and uses safe file replacement to reduce JSON corruption issues.
+- **Invalid JSON is handled safely**: malformed `auto-update.json` / metadata cache files are backed up and reset; invalid `.pi/settings.json` is not overwritten during package-extension toggles.
 - **Reload is built-in**: When extmgr asks to reload, it calls `ctx.reload()` directly.
 - **Remove requires restart**: After removing a package, you need to fully restart Pi (not just a reload) for it to be completely unloaded.
 
