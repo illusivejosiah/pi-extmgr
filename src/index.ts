@@ -71,9 +71,7 @@ export default function extensionsManager(pi: ExtensionAPI) {
     // Apply defaultDisabled for newly installed packages
     try {
       const count = await applyDefaultDisabled(ctx.cwd);
-      if (count > 0) {
-        console.log(`[extmgr] Applied defaultDisabled to ${count} package(s)`);
-      }
+      // Silent — no console output during bootstrap to avoid TUI corruption
     } catch { /* non-fatal */ }
 
     // Restore persisted auto-update config into session entries so sync lookups are valid.
