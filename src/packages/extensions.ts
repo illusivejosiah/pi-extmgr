@@ -390,9 +390,36 @@ export async function discoverPackageResources(
  * If a package declares `pi.defaultDisabled: true` in its package.json
  * and its settings.json entry is still a plain string (never configured),
  * convert it to the disabled format with all resource types set to [].
+ *
+ * Tracks which sources have been processed so re-enabling a package
+ * won't be undone on the next reload.
  */
+
+const DEFAULT_DISABLED_TRACKING_FILE = ".defaultDisabled-applied.json";
+
+async function getTrackingPath(): Promise<string> {
+  return join(getAgentDir(), DEFAULT_DISABLED_TRACKING_FILE);
+}
+
+async function loadTrackedSources(): Promise<Set<string>> {
+  try {
+    const raw = await readFile(await getTrackingPath(), "utf8");
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function saveTrackedSources(sources: Set<string>): Promise<void> {
+  const trackingPath = await getTrackingPath();
+  await writeFile(trackingPath, JSON.stringify([...sources], null, 2));
+}
+
 export async function applyDefaultDisabled(cwd: string): Promise<number> {
   let applied = 0;
+  const tracked = await loadTrackedSources();
+  let trackingChanged = false;
 
   for (const scope of ["global", "project"] as const) {
     const settingsPath = getSettingsPath(scope, cwd);
@@ -410,6 +437,8 @@ export async function applyDefaultDisabled(cwd: string): Promise<number> {
       const entry = packages[i];
       // Only process plain string entries (never configured)
       if (typeof entry !== "string") continue;
+      // Skip if already processed (user may have re-enabled)
+      if (tracked.has(entry)) continue;
 
       const packageRoot = resolvePackageRoot(entry, scope, cwd);
       if (!packageRoot) continue;
@@ -427,6 +456,8 @@ export async function applyDefaultDisabled(cwd: string): Promise<number> {
           };
           changed = true;
           applied++;
+          tracked.add(entry);
+          trackingChanged = true;
         }
       } catch { /* skip unreadable */ }
     }
@@ -435,6 +466,10 @@ export async function applyDefaultDisabled(cwd: string): Promise<number> {
       settings.packages = packages;
       await writeSettingsFile(settingsPath, settings);
     }
+  }
+
+  if (trackingChanged) {
+    await saveTrackedSources(tracked);
   }
 
   return applied;
