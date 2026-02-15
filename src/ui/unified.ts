@@ -20,6 +20,7 @@ import type {
   UnifiedAction,
   InstalledPackage,
   PackageExtensionEntry,
+  PackageResourceEntry,
 } from "../types/index.js";
 import {
   discoverExtensions,
@@ -27,7 +28,7 @@ import {
   setExtensionState,
 } from "../extensions/discovery.js";
 import { getInstalledPackages } from "../packages/discovery.js";
-import { discoverPackageExtensions, setPackageExtensionState, isPackageDisabled } from "../packages/extensions.js";
+import { discoverPackageExtensions, discoverPackageResources, setPackageExtensionState, setPackageDisabled, isPackageDisabled } from "../packages/extensions.js";
 import {
   showPackageActions,
   updatePackageWithOutcome,
@@ -91,11 +92,14 @@ async function showInteractiveOnce(
     discoverExtensions(ctx.cwd),
     getInstalledPackages(ctx, pi),
   ]);
-  const packageExtensions = await discoverPackageExtensions(installedPackages, ctx.cwd);
+  const [packageExtensions, packageResources] = await Promise.all([
+    discoverPackageExtensions(installedPackages, ctx.cwd),
+    discoverPackageResources(installedPackages, ctx.cwd),
+  ]);
 
   // Build unified items list
   const knownUpdates = getKnownUpdates(ctx);
-  const items = await buildUnifiedItems(localEntries, installedPackages, packageExtensions, knownUpdates, ctx.cwd);
+  const items = await buildUnifiedItems(localEntries, installedPackages, packageExtensions, packageResources, knownUpdates, ctx.cwd);
 
   // If nothing found, show quick actions
   if (items.length === 0) {
@@ -119,7 +123,7 @@ async function showInteractiveOnce(
     const container = new Container();
     const hasLocals = items.some((i) => i.type === "local");
     const hasPackageExtensions = items.some((i) => i.type === "package-extension");
-    const hasToggleRows = hasLocals || hasPackageExtensions;
+    const hasToggleRows = hasLocals || hasPackageExtensions || hasPackages;
     const hasPackages = items.some((i) => i.type === "package");
 
     // Header
@@ -153,7 +157,7 @@ async function showInteractiveOnce(
       getSettingsListTheme(),
       (id: string, newValue: string) => {
         const item = byId.get(id);
-        if (!item || (item.type !== "local" && item.type !== "package-extension")) return;
+        if (!item || (item.type !== "local" && item.type !== "package-extension" && item.type !== "package")) return;
 
         const state = newValue as State;
         staged.set(id, state);
@@ -273,24 +277,31 @@ export async function buildUnifiedItems(
   localEntries: Awaited<ReturnType<typeof discoverExtensions>>,
   installedPackages: InstalledPackage[],
   packageExtensions: PackageExtensionEntry[],
+  packageResources: PackageResourceEntry[],
   knownUpdates: Set<string>,
   cwd: string
 ): Promise<UnifiedItem[]> {
   const items: UnifiedItem[] = [];
   const localPaths = new Set<string>();
 
-  const packageExtensionGroups = new Map<string, PackageExtensionEntry[]>();
+  // Index children by package source (lowercased)
+  const extsByPkg = new Map<string, PackageExtensionEntry[]>();
   for (const entry of packageExtensions) {
-    const key = `${entry.packageScope}:${entry.packageSource.toLowerCase()}`;
-    const group = packageExtensionGroups.get(key) ?? [];
+    const key = entry.packageSource.toLowerCase();
+    const group = extsByPkg.get(key) ?? [];
     group.push(entry);
-    packageExtensionGroups.set(key, group);
+    extsByPkg.set(key, group);
   }
 
-  // Show all package extension rows so they can be individually toggled on/off.
-  const visiblePackageExtensions = packageExtensions;
+  const resByPkg = new Map<string, PackageResourceEntry[]>();
+  for (const entry of packageResources) {
+    const key = entry.packageSource.toLowerCase();
+    const group = resByPkg.get(key) ?? [];
+    group.push(entry);
+    resByPkg.set(key, group);
+  }
 
-  // Add local extensions
+  // 1. Local extensions first
   for (const entry of localEntries) {
     localPaths.add(entry.activePath?.toLowerCase() ?? "");
     items.push({
@@ -306,21 +317,10 @@ export async function buildUnifiedItems(
     });
   }
 
-  for (const entry of visiblePackageExtensions) {
-    items.push({
-      type: "package-extension",
-      id: entry.id,
-      displayName: entry.displayName,
-      summary: entry.summary,
-      scope: entry.packageScope,
-      state: entry.state,
-      originalState: entry.state,
-      packageSource: entry.packageSource,
-      extensionPath: entry.extensionPath,
-    });
-  }
+  // 2. Packages with children nested underneath (tree view)
+  const sortedPackages = [...installedPackages].sort((a, b) => a.name.localeCompare(b.name));
 
-  for (const pkg of installedPackages) {
+  for (const pkg of sortedPackages) {
     const pkgSourceLower = pkg.source.toLowerCase();
     const pkgResolvedLower = pkg.resolvedPath?.toLowerCase() ?? "";
 
@@ -345,6 +345,7 @@ export async function buildUnifiedItems(
     }
     if (isDuplicate) continue;
 
+    // Package parent row
     const disabled = await isPackageDisabled(pkg.source, pkg.scope, cwd);
     items.push({
       type: "package",
@@ -360,20 +361,36 @@ export async function buildUnifiedItems(
       state: disabled ? "disabled" : "enabled",
       originalState: disabled ? "disabled" : "enabled",
     });
+
+    // Extension children (togglable)
+    const pkgExts = extsByPkg.get(pkgSourceLower) ?? [];
+    for (const entry of pkgExts) {
+      items.push({
+        type: "package-extension",
+        id: entry.id,
+        displayName: entry.extensionPath,
+        summary: entry.summary,
+        scope: entry.packageScope,
+        state: entry.state,
+        originalState: entry.state,
+        packageSource: entry.packageSource,
+        extensionPath: entry.extensionPath,
+      });
+    }
+
+    // Resource children (read-only info)
+    const pkgRes = resByPkg.get(pkgSourceLower) ?? [];
+    for (const entry of pkgRes) {
+      items.push({
+        type: "package-resource",
+        id: entry.id,
+        displayName: entry.resourcePath,
+        summary: entry.summary,
+        scope: entry.packageScope,
+        resourceType: entry.resourceType,
+      });
+    }
   }
-
-  // Sort by type then display name.
-  items.sort((a, b) => {
-    const rank = (type: UnifiedItem["type"]): number => {
-      if (type === "local") return 0;
-      if (type === "package") return 1;
-      return 2;
-    };
-
-    const diff = rank(a.type) - rank(b.type);
-    if (diff !== 0) return diff;
-    return a.displayName.localeCompare(b.displayName);
-  });
 
   return items;
 }
@@ -384,7 +401,7 @@ function buildSettingsItems(
   theme: Theme
 ): SettingItem[] {
   return items.map((item) => {
-    if (item.type === "local" || item.type === "package-extension") {
+    if (item.type === "local" || item.type === "package-extension" || item.type === "package") {
       const currentState = staged.get(item.id) ?? item.state!;
       const changed = staged.has(item.id) && staged.get(item.id) !== item.originalState;
       return {
@@ -395,10 +412,11 @@ function buildSettingsItems(
       };
     }
 
+    // Resource rows — read-only info
     return {
       id: item.id,
-      label: formatUnifiedItemLabel(item, item.state ?? "enabled", theme, false),
-      currentValue: item.state ?? "enabled",
+      label: formatUnifiedItemLabel(item, "enabled", theme, false),
+      currentValue: "enabled",
       values: ["enabled"],
     };
   });
@@ -449,17 +467,18 @@ function formatUnifiedItemLabel(
 
   if (item.type === "package-extension") {
     const statusIcon = getStatusIcon(theme, state === "enabled" ? "enabled" : "disabled");
-    const scopeIcon = getScopeIcon(theme, item.scope as "global" | "project");
-    const sourceKind = getPackageSourceKind(item.packageSource ?? "");
-    const pkgIcon = getPackageIcon(
-      theme,
-      sourceKind === "npm" || sourceKind === "git" || sourceKind === "local" ? sourceKind : "local"
-    );
-    const sourceLabel = sourceKind === "unknown" ? "package" : `${sourceKind} package`;
     const changeMarker = getChangeMarker(theme, changed);
     const name = theme.bold(item.displayName);
-    const summary = theme.fg("dim", `${item.summary} • ${sourceLabel}`);
-    return `${statusIcon} ${pkgIcon} [${scopeIcon}] ${name} - ${summary}${changeMarker}`;
+    const summary = theme.fg("dim", item.summary);
+    return `  ${statusIcon} ${theme.fg("dim", "ext")}  ${name} - ${summary}${changeMarker}`;
+  }
+
+  if (item.type === "package-resource") {
+    const typeLabel = item.resourceType ?? "res";
+    const icon = typeLabel === "skill" ? "◆" : typeLabel === "agent" ? "◈" : "○";
+    const name = theme.bold(item.displayName);
+    const summary = theme.fg("dim", item.summary);
+    return `  ${theme.fg("dim", icon)} ${theme.fg("dim", typeLabel)} ${name} - ${summary}`;
   }
 
   const sourceKind = getPackageSourceKind(item.source ?? "");
@@ -506,7 +525,7 @@ function getPendingToggleChangeCount(
     const item = byId.get(id);
     if (!item) continue;
     if (
-      (item.type === "local" || item.type === "package-extension") &&
+      (item.type === "local" || item.type === "package-extension" || item.type === "package") &&
       item.originalState !== state
     ) {
       count += 1;
@@ -516,7 +535,7 @@ function getPendingToggleChangeCount(
 }
 
 function getToggleItemsForApply(items: UnifiedItem[]): UnifiedItem[] {
-  return items.filter((item) => item.type === "local" || item.type === "package-extension");
+  return items.filter((item) => item.type === "local" || item.type === "package-extension" || item.type === "package");
 }
 
 async function applyToggleChangesFromManager(
@@ -802,7 +821,7 @@ async function handleUnifiedAction(
       return false;
     }
 
-    if (item.type === "package-extension") {
+    if (item.type === "package-extension" || item.type === "package-resource") {
       return false;
     }
 
@@ -854,7 +873,7 @@ async function applyStagedChanges(
   const errors: string[] = [];
 
   for (const item of items) {
-    if ((item.type !== "local" && item.type !== "package-extension") || !item.originalState) {
+    if ((item.type !== "local" && item.type !== "package-extension" && item.type !== "package") || !item.originalState) {
       continue;
     }
 
@@ -867,6 +886,14 @@ async function applyStagedChanges(
       result = await setExtensionState(
         { activePath: item.activePath, disabledPath: item.disabledPath },
         target
+      );
+    } else if (item.type === "package") {
+      if (!item.source) continue;
+      result = await setPackageDisabled(
+        item.source,
+        item.scope as "global" | "project",
+        target === "disabled",
+        cwd
       );
     } else {
       if (!item.packageSource || !item.extensionPath) continue;

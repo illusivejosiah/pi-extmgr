@@ -46,8 +46,21 @@ export interface PackageExtensionEntry {
   state: State;
 }
 
+export type ResourceType = "extension" | "skill" | "agent" | "prompt" | "theme";
+
+export interface PackageResourceEntry {
+  id: string;
+  packageSource: string;
+  packageName: string;
+  packageScope: Scope;
+  resourceType: ResourceType;
+  resourcePath: string;
+  displayName: string;
+  summary: string;
+}
+
 export interface UnifiedItem {
-  type: "local" | "package" | "package-extension";
+  type: "local" | "package" | "package-extension" | "package-resource";
   id: string;
   displayName: string;
   summary: string;
@@ -66,6 +79,8 @@ export interface UnifiedItem {
   // Package extension fields
   packageSource?: string | undefined;
   extensionPath?: string | undefined;
+  // Package resource fields (skills, agents, prompts, themes)
+  resourceType?: ResourceType | undefined;
 }
 
 export interface SearchCache {

@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
-import type { InstalledPackage, PackageExtensionEntry, Scope, State } from "../types/index.js";
+import type { InstalledPackage, PackageExtensionEntry, PackageResourceEntry, ResourceType, Scope, State } from "../types/index.js";
 import { fileExists, readSummary } from "../utils/fs.js";
 
 interface PackageSettingsObject {
@@ -311,6 +311,78 @@ export async function setPackageExtensionState(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * Discover non-extension resources (skills, agents, prompts, themes) from packages.
+ */
+export async function discoverPackageResources(
+  packages: InstalledPackage[],
+  cwd: string
+): Promise<PackageResourceEntry[]> {
+  const entries: PackageResourceEntry[] = [];
+  const typeMap: Record<string, ResourceType> = {
+    skills: "skill",
+    agents: "agent",
+    prompts: "prompt",
+    themes: "theme",
+  };
+
+  for (const pkg of packages) {
+    const packageRoot = toPackageRoot(pkg, cwd);
+    if (!packageRoot) continue;
+
+    let piManifest: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(join(packageRoot, "package.json"), "utf8");
+      const parsed = JSON.parse(raw) as { pi?: Record<string, unknown> };
+      piManifest = parsed.pi ?? {};
+    } catch {
+      continue;
+    }
+
+    for (const [key, resourceType] of Object.entries(typeMap)) {
+      const declared = piManifest[key];
+      if (!declared) continue;
+
+      const paths = Array.isArray(declared) ? declared.filter((v): v is string => typeof v === "string") : typeof declared === "string" ? [declared] : [];
+
+      for (const p of paths) {
+        const normalizedPath = normalizeRelativePath(p);
+        const absolutePath = resolve(packageRoot, p);
+
+        // Read skill name from SKILL.md if it's a directory
+        let summary = resourceType;
+        try {
+          const { existsSync: es } = await import("node:fs");
+          const skillMd = join(absolutePath, "SKILL.md");
+          if (es(skillMd)) {
+            const content = await readFile(skillMd, "utf8");
+            const descMatch = content.match(/description:\s*(.+)/);
+            if (descMatch) summary = descMatch[1].trim().slice(0, 80);
+          } else if (es(absolutePath)) {
+            const content = await readFile(absolutePath, "utf8");
+            const descMatch = content.match(/description:\s*(.+)/);
+            if (descMatch) summary = descMatch[1].trim().slice(0, 80);
+          }
+        } catch { /* ignore */ }
+
+        entries.push({
+          id: `pkg-res:${pkg.scope}:${pkg.source}:${resourceType}:${normalizedPath}`,
+          packageSource: pkg.source,
+          packageName: pkg.name,
+          packageScope: pkg.scope,
+          resourceType,
+          resourcePath: normalizedPath,
+          displayName: `${pkg.name}/${normalizedPath}`,
+          summary,
+        });
+      }
+    }
+  }
+
+  entries.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return entries;
 }
 
 export function toProjectRelativePath(path: string, cwd: string): string {
