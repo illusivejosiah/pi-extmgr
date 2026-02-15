@@ -1,13 +1,15 @@
 /**
  * Persistent cache for package metadata to reduce npm API calls
  */
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { NpmPackage, InstalledPackage } from "../types/index.js";
 import { CACHE_LIMITS } from "../constants.js";
 
-const CACHE_DIR = join(homedir(), ".pi", "agent", ".extmgr-cache");
+const CACHE_DIR = process.env.PI_EXTMGR_CACHE_DIR
+  ? process.env.PI_EXTMGR_CACHE_DIR
+  : join(homedir(), ".pi", "agent", ".extmgr-cache");
 const CACHE_FILE = join(CACHE_DIR, "metadata.json");
 
 interface CachedPackageData {
@@ -31,6 +33,88 @@ interface CacheData {
 }
 
 let memoryCache: CacheData | null = null;
+let cacheWriteQueue: Promise<void> = Promise.resolve();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeCachedPackageEntry(key: string, value: unknown): CachedPackageData | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const timestamp = value.timestamp;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return undefined;
+  }
+
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : key;
+  const entry: CachedPackageData = {
+    name,
+    timestamp,
+  };
+
+  if (typeof value.description === "string") {
+    entry.description = value.description;
+  }
+
+  if (typeof value.version === "string") {
+    entry.version = value.version;
+  }
+
+  if (typeof value.size === "number" && Number.isFinite(value.size) && value.size >= 0) {
+    entry.size = value.size;
+  }
+
+  return entry;
+}
+
+function normalizeCacheFromDisk(input: unknown): CacheData {
+  if (!isRecord(input)) {
+    return { version: 1, packages: new Map() };
+  }
+
+  const version =
+    typeof input.version === "number" && Number.isFinite(input.version) ? input.version : 1;
+
+  const packages = new Map<string, CachedPackageData>();
+  const rawPackages = isRecord(input.packages) ? input.packages : {};
+
+  for (const [name, value] of Object.entries(rawPackages)) {
+    const normalized = normalizeCachedPackageEntry(name, value);
+    if (normalized) {
+      packages.set(name, normalized);
+    }
+  }
+
+  let lastSearch: CacheData["lastSearch"];
+  if (isRecord(input.lastSearch)) {
+    const query = input.lastSearch.query;
+    const timestamp = input.lastSearch.timestamp;
+    const results = input.lastSearch.results;
+
+    if (
+      typeof query === "string" &&
+      typeof timestamp === "number" &&
+      Number.isFinite(timestamp) &&
+      Array.isArray(results)
+    ) {
+      const normalizedResults = results.filter(
+        (value): value is string => typeof value === "string"
+      );
+      lastSearch = {
+        query,
+        timestamp,
+        results: normalizedResults,
+      };
+    }
+  }
+
+  return {
+    version,
+    packages,
+    lastSearch,
+  };
+}
 
 /**
  * Ensure cache directory exists
@@ -43,6 +127,18 @@ async function ensureCacheDir(): Promise<void> {
   }
 }
 
+async function backupCorruptCacheFile(): Promise<void> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = join(CACHE_DIR, `metadata.invalid-${stamp}.json`);
+
+  try {
+    await rename(CACHE_FILE, backupPath);
+    console.warn(`[extmgr] Invalid metadata cache JSON. Backed up to ${backupPath}.`);
+  } catch (error) {
+    console.warn("[extmgr] Failed to backup invalid cache file:", error);
+  }
+}
+
 /**
  * Load cache from disk
  */
@@ -52,21 +148,29 @@ async function loadCache(): Promise<CacheData> {
   try {
     await ensureCacheDir();
     const data = await readFile(CACHE_FILE, "utf8");
-    const parsed = JSON.parse(data) as {
-      version: number;
-      packages: Record<string, CachedPackageData>;
-      lastSearch?: CacheData["lastSearch"];
-    };
+    const trimmed = data.trim();
 
-    memoryCache = {
-      version: parsed.version,
-      packages: new Map(Object.entries(parsed.packages)),
-      lastSearch: parsed.lastSearch ?? undefined,
-    };
+    if (!trimmed) {
+      memoryCache = {
+        version: 1,
+        packages: new Map(),
+      };
+      return memoryCache;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      memoryCache = normalizeCacheFromDisk(parsed);
+    } catch {
+      await backupCorruptCacheFile();
+      memoryCache = {
+        version: 1,
+        packages: new Map(),
+      };
+    }
   } catch (error) {
-    // Cache doesn't exist or is corrupted, start fresh
+    // Cache doesn't exist or is unreadable, start fresh
     if (error instanceof Error && "code" in error && error.code !== "ENOENT") {
-      // Only log actual errors, not missing file
       console.warn("[extmgr] Cache load failed, resetting:", error.message);
     }
     memoryCache = {
@@ -84,22 +188,41 @@ async function loadCache(): Promise<CacheData> {
 async function saveCache(): Promise<void> {
   if (!memoryCache) return;
 
-  try {
-    await ensureCacheDir();
-    const data: {
-      version: number;
-      packages: Record<string, CachedPackageData>;
-      lastSearch?: { query: string; results: string[]; timestamp: number } | undefined;
-    } = {
-      version: memoryCache.version,
-      packages: Object.fromEntries(memoryCache.packages),
-      lastSearch: memoryCache.lastSearch,
-    };
+  await ensureCacheDir();
 
-    await writeFile(CACHE_FILE, JSON.stringify(data, null, 2), "utf8");
-  } catch (error) {
-    console.warn("[extmgr] Cache save failed:", error instanceof Error ? error.message : error);
+  const data: {
+    version: number;
+    packages: Record<string, CachedPackageData>;
+    lastSearch?: { query: string; results: string[]; timestamp: number } | undefined;
+  } = {
+    version: memoryCache.version,
+    packages: Object.fromEntries(memoryCache.packages),
+    lastSearch: memoryCache.lastSearch,
+  };
+
+  const content = `${JSON.stringify(data, null, 2)}\n`;
+  const tmpPath = join(CACHE_DIR, `metadata.${process.pid}.${Date.now()}.tmp`);
+
+  try {
+    await writeFile(tmpPath, content, "utf8");
+    await rename(tmpPath, CACHE_FILE);
+  } catch {
+    // Fallback for filesystems where rename-overwrite can fail.
+    await writeFile(CACHE_FILE, content, "utf8");
+  } finally {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
   }
+}
+
+async function enqueueCacheSave(): Promise<void> {
+  cacheWriteQueue = cacheWriteQueue
+    .catch(() => undefined)
+    .then(() => saveCache())
+    .catch((error) => {
+      console.warn("[extmgr] Cache save failed:", error instanceof Error ? error.message : error);
+    });
+
+  return cacheWriteQueue;
 }
 
 /**
@@ -135,7 +258,7 @@ export async function setCachedPackage(
     ...data,
     timestamp: Date.now(),
   });
-  await saveCache();
+  await enqueueCacheSave();
 }
 
 /**
@@ -191,7 +314,7 @@ export async function setCachedSearch(query: string, packages: NpmPackage[]): Pr
     timestamp: Date.now(),
   };
 
-  await saveCache();
+  await enqueueCacheSave();
 }
 
 /**
@@ -202,7 +325,7 @@ export async function clearCache(): Promise<void> {
     version: 1,
     packages: new Map(),
   };
-  await saveCache();
+  await enqueueCacheSave();
 }
 
 /**
@@ -288,5 +411,5 @@ export async function setCachedPackageSize(name: string, size: number): Promise<
     });
   }
 
-  await saveCache();
+  await enqueueCacheSave();
 }

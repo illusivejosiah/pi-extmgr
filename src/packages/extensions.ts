@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { InstalledPackage, PackageExtensionEntry, Scope, State } from "../types/index.js";
@@ -52,13 +52,63 @@ function getSettingsPath(scope: Scope, cwd: string): string {
   return join(getAgentDir(), "settings.json");
 }
 
-async function readSettingsFile(path: string): Promise<SettingsFile> {
+async function readSettingsFile(
+  path: string,
+  options?: { strict?: boolean }
+): Promise<SettingsFile> {
   try {
     const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as SettingsFile;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
+    if (!raw.trim()) {
+      return {};
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch (error) {
+      if (options?.strict) {
+        throw new Error(
+          `Invalid JSON in ${path}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      return {};
+    }
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (options?.strict) {
+        throw new Error(`Invalid settings format in ${path}: expected a JSON object`);
+      }
+      return {};
+    }
+
+    return parsed as SettingsFile;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return {};
+    }
+
+    if (options?.strict) {
+      throw error;
+    }
+
     return {};
+  }
+}
+
+async function writeSettingsFile(path: string, settings: SettingsFile): Promise<void> {
+  const settingsDir = dirname(path);
+  await mkdir(settingsDir, { recursive: true });
+
+  const content = `${JSON.stringify(settings, null, 2)}\n`;
+  const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+
+  try {
+    await writeFile(tmpPath, content, "utf8");
+    await rename(tmpPath, path);
+  } catch {
+    await writeFile(path, content, "utf8");
+  } finally {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -187,8 +237,7 @@ export async function setPackageExtensionState(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const settingsPath = getSettingsPath(scope, cwd);
-    const settingsDir = dirname(settingsPath);
-    const settings = await readSettingsFile(settingsPath);
+    const settings = await readSettingsFile(settingsPath, { strict: true });
 
     const normalizedSource = normalizeSource(packageSource);
     const normalizedPath = normalizeRelativePath(extensionPath);
@@ -231,8 +280,7 @@ export async function setPackageExtensionState(
 
     settings.packages = packages;
 
-    await mkdir(settingsDir, { recursive: true });
-    await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    await writeSettingsFile(settingsPath, settings);
 
     return { ok: true };
   } catch (error) {

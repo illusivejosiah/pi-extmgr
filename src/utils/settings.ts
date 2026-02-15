@@ -7,7 +7,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, access, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,68 @@ const SETTINGS_DIR = process.env.PI_EXTMGR_CACHE_DIR
   : join(homedir(), ".pi", "agent", ".extmgr-cache");
 const SETTINGS_FILE = join(SETTINGS_DIR, "auto-update.json");
 
+let settingsWriteQueue: Promise<void> = Promise.resolve();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeAutoUpdateConfig(input: unknown): AutoUpdateConfig {
+  if (!isRecord(input)) {
+    return { ...DEFAULT_CONFIG };
+  }
+
+  const config: AutoUpdateConfig = { ...DEFAULT_CONFIG };
+
+  const intervalMs = input.intervalMs;
+  if (typeof intervalMs === "number" && Number.isFinite(intervalMs) && intervalMs >= 0) {
+    config.intervalMs = Math.floor(intervalMs);
+  }
+
+  if (typeof input.enabled === "boolean") {
+    config.enabled = input.enabled;
+  }
+
+  if (typeof input.displayText === "string" && input.displayText.trim()) {
+    config.displayText = input.displayText.trim();
+  }
+
+  if (
+    typeof input.lastCheck === "number" &&
+    Number.isFinite(input.lastCheck) &&
+    input.lastCheck >= 0
+  ) {
+    config.lastCheck = input.lastCheck;
+  }
+
+  if (
+    typeof input.nextCheck === "number" &&
+    Number.isFinite(input.nextCheck) &&
+    input.nextCheck >= 0
+  ) {
+    config.nextCheck = input.nextCheck;
+  }
+
+  if (Array.isArray(input.updatesAvailable)) {
+    const updates = input.updatesAvailable
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (updates.length > 0) {
+      config.updatesAvailable = updates;
+    }
+  }
+
+  if (!config.enabled || config.intervalMs === 0) {
+    config.enabled = false;
+    config.intervalMs = 0;
+    config.displayText = "off";
+  }
+
+  return config;
+}
+
 function getSessionConfig(
   ctx: ExtensionCommandContext | ExtensionContext
 ): AutoUpdateConfig | undefined {
@@ -43,7 +105,7 @@ function getSessionConfig(
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (entry?.type === "custom" && entry.customType === SETTINGS_KEY && entry.data) {
-      return { ...DEFAULT_CONFIG, ...(entry.data as AutoUpdateConfig) };
+      return sanitizeAutoUpdateConfig(entry.data);
     }
   }
 
@@ -73,6 +135,20 @@ async function ensureSettingsDir(): Promise<void> {
   }
 }
 
+async function backupCorruptSettingsFile(): Promise<void> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = join(SETTINGS_DIR, `auto-update.invalid-${stamp}.json`);
+
+  try {
+    await rename(SETTINGS_FILE, backupPath);
+    console.warn(
+      `[extmgr] Invalid auto-update settings JSON. Backed up to ${backupPath} and reset to defaults.`
+    );
+  } catch (error) {
+    console.warn("[extmgr] Failed to backup invalid auto-update settings file:", error);
+  }
+}
+
 /**
  * Reads config from disk asynchronously
  */
@@ -81,9 +157,19 @@ async function readConfigFromDisk(): Promise<AutoUpdateConfig | undefined> {
     if (!(await fileExists(SETTINGS_FILE))) {
       return undefined;
     }
+
     const raw = await readFile(SETTINGS_FILE, "utf8");
-    const parsed = JSON.parse(raw) as Partial<AutoUpdateConfig>;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    if (!raw.trim()) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return sanitizeAutoUpdateConfig(parsed);
+    } catch {
+      await backupCorruptSettingsFile();
+      return undefined;
+    }
   } catch (error) {
     console.warn("[extmgr] Failed to read settings:", error);
     return undefined;
@@ -91,15 +177,32 @@ async function readConfigFromDisk(): Promise<AutoUpdateConfig | undefined> {
 }
 
 /**
- * Writes config to disk asynchronously
+ * Writes config to disk asynchronously (serialized + best-effort atomic)
  */
 async function writeConfigToDisk(config: AutoUpdateConfig): Promise<void> {
+  await ensureSettingsDir();
+
+  const content = `${JSON.stringify(config, null, 2)}\n`;
+  const tmpPath = join(SETTINGS_DIR, `auto-update.${process.pid}.${Date.now()}.tmp`);
+
   try {
-    await ensureSettingsDir();
-    await writeFile(SETTINGS_FILE, JSON.stringify(config, null, 2), "utf8");
-  } catch (error) {
-    console.warn("[extmgr] Failed to write settings:", error);
+    await writeFile(tmpPath, content, "utf8");
+    await rename(tmpPath, SETTINGS_FILE);
+  } catch {
+    // Fallback for filesystems where rename-overwrite can fail.
+    await writeFile(SETTINGS_FILE, content, "utf8");
+  } finally {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
   }
+}
+
+function enqueueConfigWrite(config: AutoUpdateConfig): void {
+  settingsWriteQueue = settingsWriteQueue
+    .catch(() => undefined)
+    .then(() => writeConfigToDisk(config))
+    .catch((error) => {
+      console.warn("[extmgr] Failed to write settings:", error);
+    });
 }
 
 /**
@@ -153,17 +256,13 @@ export function getAutoUpdateConfig(
  * Save auto-update config to session + disk.
  */
 export function saveAutoUpdateConfig(pi: ExtensionAPI, config: Partial<AutoUpdateConfig>): void {
-  const fullConfig: AutoUpdateConfig = {
+  const fullConfig = sanitizeAutoUpdateConfig({
     ...DEFAULT_CONFIG,
     ...config,
-  };
+  });
 
   pi.appendEntry(SETTINGS_KEY, fullConfig);
-
-  // Write to disk asynchronously (fire and forget)
-  writeConfigToDisk(fullConfig).catch((err) => {
-    console.warn("[extmgr] Failed to save settings:", err);
-  });
+  enqueueConfigWrite(fullConfig);
 }
 
 /**

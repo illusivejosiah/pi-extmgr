@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { discoverPackageExtensions, setPackageExtensionState } from "../src/packages/extensions.js";
@@ -99,5 +99,43 @@ void test("setPackageExtensionState converts string package entries and keeps la
     } else {
       process.env.PI_CODING_AGENT_DIR = oldAgentDir;
     }
+  }
+});
+
+void test("setPackageExtensionState fails safely when settings.json is invalid", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-extmgr-cwd-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-extmgr-agent-"));
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const settingsPath = join(agentDir, "settings.json");
+
+  try {
+    await writeFile(settingsPath, "{ invalid json", "utf8");
+
+    const result = await setPackageExtensionState(
+      "npm:demo-pkg@1.0.0",
+      "extensions/main.ts",
+      "global",
+      "disabled",
+      cwd
+    );
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.error, /Invalid JSON/);
+    }
+
+    const raw = await readFile(settingsPath, "utf8");
+    assert.equal(raw, "{ invalid json");
+  } finally {
+    if (oldAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    }
+
+    await rm(cwd, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
   }
 });
