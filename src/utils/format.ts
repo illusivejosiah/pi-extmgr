@@ -57,28 +57,47 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-export function isPackageSource(str: string): boolean {
+function isGitLikeSource(source: string): boolean {
   return (
-    str.startsWith("npm:") ||
-    str.startsWith("git:") ||
-    str.startsWith("http") ||
-    str.startsWith("/") ||
-    str.startsWith("./") ||
-    str.startsWith("../")
+    source.startsWith("git:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://") ||
+    source.startsWith("ssh://") ||
+    source.startsWith("git://") ||
+    /^git@[^\s:]+:.+/.test(source)
   );
 }
 
-export function normalizePackageSource(source: string): string {
-  if (
-    source.startsWith("npm:") ||
-    source.startsWith("git:") ||
-    source.startsWith("http") ||
+function isLocalPathSource(source: string): boolean {
+  return (
     source.startsWith("/") ||
-    source.startsWith(".")
-  ) {
-    return source;
+    source.startsWith("./") ||
+    source.startsWith("../") ||
+    source.startsWith(".\\") ||
+    source.startsWith("..\\") ||
+    source.startsWith("~/") ||
+    source.startsWith("file://") ||
+    /^[a-zA-Z]:[\\/]/.test(source) ||
+    source.startsWith("\\\\")
+  );
+}
+
+export function isPackageSource(str: string): boolean {
+  const source = str.trim();
+  if (!source) return false;
+
+  return source.startsWith("npm:") || isGitLikeSource(source) || isLocalPathSource(source);
+}
+
+export function normalizePackageSource(source: string): string {
+  const trimmed = source.trim();
+  if (!trimmed) return trimmed;
+
+  if (isPackageSource(trimmed)) {
+    return trimmed;
   }
-  return `npm:${source}`;
+
+  return `npm:${trimmed}`;
 }
 
 export function parseNpmSource(

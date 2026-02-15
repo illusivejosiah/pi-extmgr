@@ -144,18 +144,7 @@ function isScopeHeader(lowerTrimmed: string, scope: "global" | "project"): boole
 }
 
 function looksLikePackageSource(source: string): boolean {
-  return (
-    source.startsWith("npm:") ||
-    source.startsWith("git:") ||
-    source.startsWith("http://") ||
-    source.startsWith("https://") ||
-    source.startsWith("/") ||
-    source.startsWith("./") ||
-    source.startsWith("../") ||
-    source.startsWith("~/") ||
-    /^[a-zA-Z]:[\\/]/.test(source) ||
-    source.startsWith("\\\\")
-  );
+  return getPackageSourceKind(source) !== "unknown";
 }
 
 function parseResolvedPathLine(line: string): string | undefined {
@@ -168,6 +157,10 @@ function parseResolvedPathLine(line: string): string | undefined {
     line.startsWith("/") ||
     line.startsWith("./") ||
     line.startsWith("../") ||
+    line.startsWith(".\\") ||
+    line.startsWith("..\\") ||
+    line.startsWith("~/") ||
+    line.startsWith("file://") ||
     /^[a-zA-Z]:[\\/]/.test(line) ||
     line.startsWith("\\\\")
   ) {

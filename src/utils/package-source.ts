@@ -30,7 +30,10 @@ export function getPackageSourceKind(source: string): PackageSourceKind {
     normalized.startsWith("/") ||
     normalized.startsWith("./") ||
     normalized.startsWith("../") ||
+    normalized.startsWith(".\\") ||
+    normalized.startsWith("..\\") ||
     normalized.startsWith("~/") ||
+    normalized.startsWith("file://") ||
     /^[a-zA-Z]:[\\/]/.test(normalized) ||
     normalized.startsWith("\\\\")
   ) {

@@ -8,7 +8,7 @@ import {
   parseInstalledPackagesOutput,
   parseInstalledPackagesOutputAllScopes,
 } from "../src/packages/discovery.js";
-import { parseNpmSource } from "../src/utils/format.js";
+import { isPackageSource, normalizePackageSource, parseNpmSource } from "../src/utils/format.js";
 import { getPackageSourceKind } from "../src/utils/package-source.js";
 import { createMockHarness } from "./helpers/mocks.js";
 
@@ -97,6 +97,50 @@ Global:
   assert.equal(result[0]?.name, "super-ext");
 });
 
+void test("parseInstalledPackagesOutput parses git@ ssh sources without git: prefix", () => {
+  const input = `
+Global:
+  git@github.com:user/super-ext.git@v1
+`;
+
+  const result = parseInstalledPackagesOutput(input);
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.name, "super-ext");
+});
+
+void test("parseInstalledPackagesOutput parses ssh:// sources without git: prefix", () => {
+  const input = `
+Global:
+  ssh://git@github.com/user/super-ext.git@v1
+`;
+
+  const result = parseInstalledPackagesOutput(input);
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.name, "super-ext");
+});
+
+void test("normalizePackageSource preserves git and local path sources", () => {
+  assert.equal(
+    normalizePackageSource("git@github.com:user/repo.git"),
+    "git@github.com:user/repo.git"
+  );
+  assert.equal(
+    normalizePackageSource("ssh://git@github.com/user/repo.git"),
+    "ssh://git@github.com/user/repo.git"
+  );
+  assert.equal(normalizePackageSource("~/dev/ext"), "~/dev/ext");
+  assert.equal(normalizePackageSource(".\\extensions\\demo"), ".\\extensions\\demo");
+  assert.equal(normalizePackageSource("@scope/pkg"), "npm:@scope/pkg");
+});
+
+void test("isPackageSource recognizes git ssh and local path sources", () => {
+  assert.equal(isPackageSource("git@github.com:user/repo.git"), true);
+  assert.equal(isPackageSource("ssh://git@github.com/user/repo.git"), true);
+  assert.equal(isPackageSource("~/dev/ext"), true);
+  assert.equal(isPackageSource(".\\extensions\\demo"), true);
+  assert.equal(isPackageSource("pi-extmgr"), false);
+});
+
 void test("parseNpmSource parses scoped and unscoped package specs", () => {
   assert.deepEqual(parseNpmSource("npm:demo@1.2.3"), { name: "demo", version: "1.2.3" });
   assert.deepEqual(parseNpmSource("npm:@scope/demo@1.2.3"), {
@@ -113,6 +157,8 @@ void test("getPackageSourceKind classifies npm/git/local sources", () => {
   assert.equal(getPackageSourceKind("https://github.com/user/repo@main"), "git");
   assert.equal(getPackageSourceKind("git@github.com:user/repo"), "git");
   assert.equal(getPackageSourceKind("./vendor/demo"), "local");
+  assert.equal(getPackageSourceKind(".\\vendor\\demo"), "local");
+  assert.equal(getPackageSourceKind("file:///opt/pi/pkg"), "local");
   assert.equal(getPackageSourceKind("/opt/pi/pkg"), "local");
 });
 
