@@ -72,6 +72,12 @@ function getSelectedIndex(settingsList: unknown): number | undefined {
   return undefined;
 }
 
+function setSelectedIndex(settingsList: unknown, index: number): void {
+  if (settingsList && typeof settingsList === "object") {
+    (settingsList as SelectableList).selectedIndex = index;
+  }
+}
+
 export async function showInteractive(
   ctx: ExtensionCommandContext,
   pi: ExtensionAPI
@@ -119,12 +125,37 @@ async function showInteractiveOnce(
   const staged = new Map<string, State>();
   const byId = new Map(items.map((item) => [item.id, item]));
 
+  // Collapse state: track which package IDs are collapsed
+  const collapsed = new Set<string>();
+
+  // Map each child item to its parent package ID
+  const parentOf = new Map<string, string>();
+  let lastPkgId: string | null = null;
+  for (const item of items) {
+    if (item.type === "package") {
+      lastPkgId = item.id;
+    } else if (item.type === "package-extension" || item.type === "package-resource") {
+      if (lastPkgId) parentOf.set(item.id, lastPkgId);
+    } else {
+      lastPkgId = null;
+    }
+  }
+
+  function getVisibleItems(): UnifiedItem[] {
+    return items.filter((item) => {
+      const parent = parentOf.get(item.id);
+      if (parent && collapsed.has(parent)) return false;
+      return true;
+    });
+  }
+
   const result = await ctx.ui.custom<UnifiedAction>((tui, theme, _keybindings, done) => {
     const container = new Container();
+    let visibleItems = getVisibleItems();
     const hasLocals = items.some((i) => i.type === "local");
     const hasPackageExtensions = items.some((i) => i.type === "package-extension");
-    const hasToggleRows = hasLocals || hasPackageExtensions || hasPackages;
     const hasPackages = items.some((i) => i.type === "package");
+    const hasToggleRows = hasLocals || hasPackageExtensions || hasPackages;
 
     // Header
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -133,7 +164,7 @@ async function showInteractiveOnce(
       new Text(
         theme.fg(
           "muted",
-          `${items.length} item${items.length === 1 ? "" : "s"} • Space/Enter toggle extensions • Enter/A actions • u update pkg • x remove selected`
+          `${items.length} item${items.length === 1 ? "" : "s"} • Space toggle • Enter/A actions • ◂▸ collapse • x remove`
         ),
         2,
         0
@@ -148,12 +179,12 @@ async function showInteractiveOnce(
     );
     container.addChild(new Spacer(1));
 
-    // Build settings items
-    const settingsItems = buildSettingsItems(items, staged, theme);
+    // Build settings items from visible (non-collapsed) items
+    let settingsItems = buildSettingsItems(visibleItems, staged, theme, collapsed);
 
-    const settingsList = new SettingsList(
+    let settingsList = new SettingsList(
       settingsItems,
-      Math.min(items.length + 2, UI.maxListHeight),
+      Math.min(visibleItems.length + 2, UI.maxListHeight),
       getSettingsListTheme(),
       (id: string, newValue: string) => {
         const item = byId.get(id);
@@ -165,7 +196,7 @@ async function showInteractiveOnce(
         const settingsItem = settingsItems.find((x) => x.id === id);
         if (settingsItem) {
           const changed = state !== item.originalState;
-          settingsItem.label = formatUnifiedItemLabel(item, state, theme, changed);
+          settingsItem.label = formatUnifiedItemLabel(item, state, theme, changed, collapsed);
         }
         tui.requestRender();
       },
@@ -173,7 +204,50 @@ async function showInteractiveOnce(
       { enableSearch: items.length > UI.searchThreshold }
     );
 
-    container.addChild(settingsList);
+    // Rebuild the settings list after collapse/expand, preserving selection
+    function rebuildList(selectedId?: string) {
+      visibleItems = getVisibleItems();
+      settingsItems = buildSettingsItems(visibleItems, staged, theme, collapsed);
+
+      // Find the child index in container for the old list and replace
+      settingsList = new SettingsList(
+        settingsItems,
+        Math.min(visibleItems.length + 2, UI.maxListHeight),
+        getSettingsListTheme(),
+        (id: string, newValue: string) => {
+          const item = byId.get(id);
+          if (!item || (item.type !== "local" && item.type !== "package-extension" && item.type !== "package")) return;
+
+          const state = newValue as State;
+          staged.set(id, state);
+
+          const settingsItem = settingsItems.find((x) => x.id === id);
+          if (settingsItem) {
+            const changed = state !== item.originalState;
+            settingsItem.label = formatUnifiedItemLabel(item, state, theme, changed, collapsed);
+          }
+          tui.requestRender();
+        },
+        () => done({ type: "cancel" }),
+        { enableSearch: items.length > UI.searchThreshold }
+      );
+
+      // Restore selection to the package row
+      if (selectedId) {
+        const newIdx = settingsItems.findIndex((s) => s.id === selectedId);
+        if (newIdx >= 0) setSelectedIndex(settingsList, newIdx);
+      }
+
+      tui.requestRender();
+    }
+
+    // Wrapper that delegates to current settingsList (allows rebuild on collapse/expand)
+    const listProxy = {
+      render(width: number) { return settingsList.render(width); },
+      invalidate() { settingsList.invalidate(); },
+      handleInput(data: string) { settingsList.handleInput?.(data); },
+    };
+    container.addChild(listProxy);
     container.addChild(new Spacer(1));
 
     // Footer with keyboard shortcuts
@@ -195,6 +269,24 @@ async function showInteractiveOnce(
 
         if (matchesKey(data, Key.ctrl("s")) || data === "s" || data === "S") {
           done({ type: "apply" });
+          return;
+        }
+
+        // Left arrow: collapse package (hide children)
+        if (data === "\x1b[D" && selectedItem?.type === "package") {
+          if (!collapsed.has(selectedId)) {
+            collapsed.add(selectedId);
+            rebuildList(selectedId);
+          }
+          return;
+        }
+
+        // Right arrow: expand package (show children)
+        if (data === "\x1b[C" && selectedItem?.type === "package") {
+          if (collapsed.has(selectedId)) {
+            collapsed.delete(selectedId);
+            rebuildList(selectedId);
+          }
           return;
         }
 
@@ -398,7 +490,8 @@ export async function buildUnifiedItems(
 function buildSettingsItems(
   items: UnifiedItem[],
   staged: Map<string, State>,
-  theme: Theme
+  theme: Theme,
+  collapsed?: Set<string>
 ): SettingItem[] {
   return items.map((item) => {
     if (item.type === "local" || item.type === "package-extension" || item.type === "package") {
@@ -406,7 +499,7 @@ function buildSettingsItems(
       const changed = staged.has(item.id) && staged.get(item.id) !== item.originalState;
       return {
         id: item.id,
-        label: formatUnifiedItemLabel(item, currentState, theme, changed),
+        label: formatUnifiedItemLabel(item, currentState, theme, changed, collapsed),
         currentValue: currentState,
         values: ["enabled", "disabled"],
       };
@@ -415,7 +508,7 @@ function buildSettingsItems(
     // Resource rows — read-only info
     return {
       id: item.id,
-      label: formatUnifiedItemLabel(item, "enabled", theme, false),
+      label: formatUnifiedItemLabel(item, "enabled", theme, false, collapsed),
       currentValue: "enabled",
       values: ["enabled"],
     };
@@ -454,7 +547,8 @@ function formatUnifiedItemLabel(
   item: UnifiedItem,
   state: State,
   theme: Theme,
-  changed = false
+  changed = false,
+  collapsed?: Set<string>
 ): string {
   if (item.type === "local") {
     const statusIcon = getStatusIcon(theme, state === "enabled" ? "enabled" : "disabled");
@@ -513,7 +607,9 @@ function formatUnifiedItemLabel(
 
   const summary = theme.fg("dim", infoParts.join(" • "));
   const disabledBadge = state === "disabled" ? ` ${theme.fg("error", "[disabled]")}` : "";
-  return `${pkgIcon} [${scopeIcon}] ${name}${version}${updateBadge}${disabledBadge} - ${summary}`;
+  const collapseIcon = collapsed?.has(item.id) ? "▸" : "▾";
+  const changeMarker = getChangeMarker(theme, changed);
+  return `${collapseIcon} ${pkgIcon} [${scopeIcon}] ${name}${version}${updateBadge}${disabledBadge} - ${summary}${changeMarker}`;
 }
 
 function getPendingToggleChangeCount(
